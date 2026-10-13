@@ -2,7 +2,7 @@ import { createRoute, type OpenAPIHono, z } from '@hono/zod-openapi'
 import { roleSchema } from 'tula-closeline-contract'
 import type { Container } from '~/container'
 import { noStore } from '~/http/client'
-import { errorResponse } from '~/http/responses'
+import { errorResponses } from '~/http/responses'
 import { createRouter } from '~/http/router'
 import type { AppEnv } from '~/http/types'
 import * as Bootstrap from '~/modules/bootstrap/service'
@@ -22,8 +22,16 @@ const me = createRoute({
   request: { headers: bearer },
   responses: {
     200: { description: 'The user.', content: { 'application/json': { schema: meSchema } } },
-    401: errorResponse('No valid access token, or its session ended.'),
-    500: errorResponse('Something went wrong on our side.'),
+    ...errorResponses([
+      'auth.unauthenticated',
+      'auth.token_expired',
+      'auth.token_invalid',
+      'auth.unavailable',
+      'session.revoked',
+      'session.expired',
+      'session.reuse_detected',
+      'server.internal',
+    ]),
   },
 })
 

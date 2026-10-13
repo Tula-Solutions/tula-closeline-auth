@@ -1,7 +1,7 @@
-import type { UserId } from 'tula-closeline-contract'
+import { AUTH_ERRORS, type UserId } from 'tula-closeline-contract'
 import { isAppError } from 'tula-closeline-kit'
 import type { Container } from '~/container'
-import { AUTH_ERRORS, fail, MembershipFaulted, MembershipOutage } from '~/errors'
+import { fail, MembershipFaulted, MembershipOutage } from '~/errors'
 import { withTimeout } from '~/lib/timeout'
 import {
   type Membership,

@@ -1,6 +1,6 @@
 import { createRoute, type OpenAPIHono } from '@hono/zod-openapi'
 import type { Container } from '~/container'
-import { errorResponse } from '~/http/responses'
+import { errorResponses } from '~/http/responses'
 import { createRouter } from '~/http/router'
 import type { AppEnv } from '~/http/types'
 import { livenessSchema, readinessSchema } from './schema'
@@ -17,7 +17,7 @@ const healthz = createRoute({
       description: 'The process is up.',
       content: { 'application/json': { schema: livenessSchema } },
     },
-    500: errorResponse('Something went wrong on our side.'),
+    ...errorResponses(['server.internal']),
   },
 })
 
@@ -36,7 +36,7 @@ const readyz = createRoute({
       description: 'At least one check failed or timed out.',
       content: { 'application/json': { schema: readinessSchema } },
     },
-    500: errorResponse('Something went wrong on our side.'),
+    ...errorResponses(['server.internal']),
   },
 })
 

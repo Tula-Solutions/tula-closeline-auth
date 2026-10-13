@@ -1,6 +1,6 @@
 import { createRoute, type OpenAPIHono } from '@hono/zod-openapi'
 import type { Container } from '~/container'
-import { errorResponse } from '~/http/responses'
+import { errorResponses } from '~/http/responses'
 import { createRouter } from '~/http/router'
 import type { AppEnv } from '~/http/types'
 import * as Bootstrap from '~/modules/bootstrap/service'
@@ -21,7 +21,7 @@ const route = createRoute({
       description: 'The key set.',
       content: { 'application/json': { schema: jwksSchema } },
     },
-    500: errorResponse('Something went wrong on our side.'),
+    ...errorResponses(['server.internal']),
   },
 })
 

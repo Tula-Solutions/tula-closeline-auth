@@ -1,5 +1,6 @@
+import { AUTH_ERRORS } from 'tula-closeline-contract'
 import type { Container } from '~/container'
-import { AUTH_ERRORS, fail, rateLimited } from '~/errors'
+import { fail, rateLimited } from '~/errors'
 import { randomDigits, sha256Hex, timingSafeEqual } from '~/lib/crypto'
 import { durationToMs } from '~/lib/duration'
 import { normalizeEmail } from '~/lib/email'
