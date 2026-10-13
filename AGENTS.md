@@ -105,8 +105,10 @@ attempt starts, and `verify-email` holds no database transaction across the call
 only after the account exists, so a retry works and gets the same Organization. Core is given the
 verified address (normalized) and the name (first and last joined by a space, `null` when absent;
 `composeMemberName`) for its member list (hub ADR 0015). When the account is then not written for
-an Owner's Organization, auth asks core to abandon it at once (key `abandon:<attempt id>`, three
-tries inside the 5 s bound); there is no sweep yet. Details, the outcomes and what is left:
+an Owner's Organization because the address belongs to a different user, auth asks core to
+abandon it at once (key `abandon:<attempt id>`, three tries inside one 5 s bound). An unexpected
+insert error is only reported: it cannot be proved final while the attempt is usable (a double
+submit would lose a working Organization), so that abandon waits for a sweep, which does not exist yet. Details, the outcomes and what is left:
 `.claude/rules/membership.md`.
 
 ## Retention
