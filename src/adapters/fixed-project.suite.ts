@@ -10,6 +10,8 @@ export type FixedProjectHarness = {
   adapter: FixedProject
   /** Puts a second project (and so a second workspace) where the service did not. */
   plantSecondProject: () => Promise<void>
+  /** Puts a third environment where the service did not (a project has exactly two). */
+  plantExtraEnvironment: () => Promise<void>
 }
 
 const NOW = new Date('2026-01-01T00:00:00Z')
@@ -30,6 +32,15 @@ export function fixedProjectSuite(name: string, make: () => Promise<FixedProject
     test('refuses to run when the Region already holds a second project', async () => {
       await harness.adapter.ensure('development', idsOf(1), NOW)
       await harness.plantSecondProject()
+
+      await expect(harness.adapter.ensure('development', idsOf(2), NOW)).rejects.toBeInstanceOf(
+        FixedProjectViolation
+      )
+    })
+
+    test('refuses to run when the Region holds an environment beyond the two it creates', async () => {
+      await harness.adapter.ensure('development', idsOf(1), NOW)
+      await harness.plantExtraEnvironment()
 
       await expect(harness.adapter.ensure('development', idsOf(2), NOW)).rejects.toBeInstanceOf(
         FixedProjectViolation

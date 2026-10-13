@@ -26,6 +26,12 @@ fixedProjectSuite('postgres', async () => {
         [crypto.randomUUID(), workspace]
       )
     },
+    plantExtraEnvironment: async () => {
+      await owner.query(
+        "insert into auth.environments (id, project_id, kind) select $1, id, 'staging' from auth.projects",
+        [crypto.randomUUID()]
+      )
+    },
   }
 })
 
