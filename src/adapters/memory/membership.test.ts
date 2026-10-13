@@ -1,12 +1,14 @@
 import { expect, test } from 'bun:test'
 import { formatId } from 'tula-closeline-contract'
 import { membershipSuite } from '~/adapters/membership.suite'
+import { FixedClock } from '~/adapters/memory/clock'
 import { createMemoryMembership } from '~/adapters/memory/membership'
 import { createPlaceholderMembership } from '~/adapters/placeholder/membership'
 import { MembershipUnavailable } from '~/ports/membership'
 
 membershipSuite('memory', () => {
-  const adapter = createMemoryMembership()
+  const clock = new FixedClock()
+  const adapter = createMemoryMembership(clock)
   return {
     adapter,
     invite: (token, email) =>
@@ -17,6 +19,7 @@ membershipSuite('memory', () => {
       }),
     breakDown: adapter.breakDown,
     setStatus: adapter.setOrganizationStatus,
+    advance: (ms) => clock.advance(ms),
   }
 })
 

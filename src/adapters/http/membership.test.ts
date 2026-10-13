@@ -91,6 +91,7 @@ membershipSuite('http (against a fake of core)', () => {
     invite: (token, email) => core.invite(token, { email }),
     breakDown: core.breakDown,
     setStatus: core.setStatus,
+    advance: core.advanceClock,
   }
 })
 

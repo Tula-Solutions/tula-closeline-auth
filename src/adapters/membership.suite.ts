@@ -14,6 +14,8 @@ export type MembershipHarness = {
   breakDown: (broken: boolean) => void
   /** Sets an Organization's status, as an operator would in core. */
   setStatus: (organizationId: string, status: OrganizationStatus) => void
+  /** Moves the time core reads (an Organization's age) forward by this many milliseconds. */
+  advance: (ms: number) => void
 }
 
 /** A well-formed Invitation token (22 or more URL-safe characters), as the contract requires. */
@@ -194,6 +196,63 @@ export function membershipSuite(name: string, make: () => MembershipHarness): vo
       ).rejects.toBeInstanceOf(MembershipNotAbandonable)
 
       expect(await adapter.forUser(owner)).toMatchObject({ organizationId, role: 'owner' })
+    })
+
+    test('a suspended Organization is refused and left as it is', async () => {
+      const { adapter, setStatus } = make()
+      const userId = user()
+      const { organizationId } = await adapter.createOrganization({
+        email: 'maya@northline.app',
+        memberName: null,
+        userId,
+        name: 'Northline',
+        idempotencyKey: crypto.randomUUID(),
+      })
+      setStatus(organizationId, 'suspended')
+
+      await expect(
+        adapter.abandonOrganization({
+          organizationId,
+          userId,
+          idempotencyKey: `abandon:${crypto.randomUUID()}`,
+        })
+      ).rejects.toBeInstanceOf(MembershipNotAbandonable)
+
+      expect(await adapter.forUser(userId)).toMatchObject({
+        organizationId,
+        organizationStatus: 'suspended',
+      })
+    })
+
+    test.each([
+      ['just under 24 hours old is abandoned', 24 * 3_600_000 - 1_000, true],
+      ['exactly 24 hours old is refused', 24 * 3_600_000, false],
+      ['a week old is refused', 7 * 24 * 3_600_000, false],
+    ])('an Organization %s', async (_label, age, abandoned) => {
+      const { adapter, advance } = make()
+      const userId = user()
+      const { organizationId } = await adapter.createOrganization({
+        email: 'maya@northline.app',
+        memberName: null,
+        userId,
+        name: 'Northline',
+        idempotencyKey: crypto.randomUUID(),
+      })
+      advance(age)
+
+      const attempt = adapter.abandonOrganization({
+        organizationId,
+        userId,
+        idempotencyKey: `abandon:${crypto.randomUUID()}`,
+      })
+
+      if (abandoned) {
+        await expect(attempt).resolves.toBeUndefined()
+        expect(await adapter.forUser(userId)).toBeNull()
+      } else {
+        await expect(attempt).rejects.toBeInstanceOf(MembershipNotAbandonable)
+        expect(await adapter.forUser(userId)).toMatchObject({ organizationId, role: 'owner' })
+      }
     })
 
     test('a blank Organization name is refused', async () => {

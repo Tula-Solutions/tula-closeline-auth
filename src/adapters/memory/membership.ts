@@ -1,4 +1,5 @@
 import {
+  ABANDON_MAX_AGE_HOURS,
   emailSchema,
   formatId,
   internalCreateOrganizationRequestSchema,
@@ -7,6 +8,7 @@ import {
   type Role,
   type UserId,
 } from 'tula-closeline-contract'
+import type { Clock } from '~/ports/clock'
 import {
   type Membership,
   MembershipBusy,
@@ -53,12 +55,13 @@ export type MemoryMembership = MembershipClaims & {
 }
 
 /** Builds the memory membership. Its answers are what the real service gives, minus the network. */
-export function createMemoryMembership(): MemoryMembership {
+export function createMemoryMembership(clock: Clock = { now: () => new Date() }): MemoryMembership {
   const members = new Map<string, Membership>()
   const byKey = new Map<string, Membership>()
   const invitations = new Map<string, { email: string; organizationId: string; role: Role }>()
   const organizations: MemoryMembership['organizations'] = []
   const statuses = new Map<string, OrganizationStatus>()
+  const createdAt = new Map<string, Date>()
   const profiles: MemoryMembership['profiles'] = []
   const abandons: MemoryMembership['abandons'] = []
   const calls = { create: 0, accept: 0, lookup: 0, abandon: 0, aborted: 0 }
@@ -144,6 +147,7 @@ export function createMemoryMembership(): MemoryMembership {
       }
       profiles.push({ userId, email, name: memberName })
       const membership: Membership = { organizationId: newOrganizationId(), role: 'owner' }
+      createdAt.set(membership.organizationId, clock.now())
       organizations.push({ name, owner: userId, organizationId: membership.organizationId })
       members.set(userId, membership)
       byKey.set(idempotencyKey, membership)
@@ -192,7 +196,18 @@ export function createMemoryMembership(): MemoryMembership {
         return
       }
       const [only] = here
-      if (refusing || here.length !== 1 || only?.[0] !== userId) {
+      // Like core: one member and it is this user, not suspended, and under 24 hours old.
+      const born = createdAt.get(organizationId)
+      const old =
+        born !== undefined &&
+        clock.now().getTime() - born.getTime() >= ABANDON_MAX_AGE_HOURS * 3_600_000
+      if (
+        refusing ||
+        here.length !== 1 ||
+        only?.[0] !== userId ||
+        statuses.get(organizationId) === 'suspended' ||
+        old
+      ) {
         throw new MembershipNotAbandonable()
       }
       // Core frees the user id at once and forgets the sign-up's key, so a retry starts afresh.

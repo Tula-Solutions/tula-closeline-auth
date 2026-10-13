@@ -1,4 +1,5 @@
 import {
+  ABANDON_MAX_AGE_HOURS,
   CORE_ERRORS,
   type CoreErrorCode,
   ERRORS,
@@ -54,6 +55,8 @@ export type FakeCore = {
   untilRequests: (count: number) => Promise<void>
   /** Resolves once at least `count` requests were abandoned by their client. */
   untilAbandoned: (count: number) => Promise<void>
+  /** Moves the fake's own clock forward, which the 24 hour abandon rule reads. */
+  advanceClock: (ms: number) => void
   /** Stops the server. */
   stop: () => Promise<void>
 }
@@ -106,6 +109,8 @@ export function startFakeCore(secret = 'fake-core-secret-0123456789abcdef-0123')
     string,
     { email: string; role: InvitableRole; organizationId: OrganizationId }
   >()
+  const created = new Map<string, number>()
+  let skewMs = 0
   const acceptedByKey = new Map<string, { organizationId: OrganizationId; role: Role }>()
   let broken = false
 
@@ -168,6 +173,7 @@ export function startFakeCore(secret = 'fake-core-secret-0123456789abcdef-0123')
         role: 'owner' as const,
       }
       members.set(parsed.data.userId, membership)
+      created.set(membership.organizationId, Date.now() + skewMs)
       return Response.json(membership)
     }
 
@@ -224,7 +230,15 @@ export function startFakeCore(secret = 'fake-core-secret-0123456789abcdef-0123')
       const status = statuses.get(organizationId) ?? 'active'
       if (here.length > 0 && status !== 'deleted') {
         // Like core: one member, that user, and an Organization that is not suspended.
-        if (here.length !== 1 || here[0]?.[0] !== parsed.data.userId || status === 'suspended') {
+        const born = created.get(organizationId)
+        const old =
+          born !== undefined && Date.now() + skewMs - born >= ABANDON_MAX_AGE_HOURS * 3_600_000
+        if (
+          here.length !== 1 ||
+          here[0]?.[0] !== parsed.data.userId ||
+          status === 'suspended' ||
+          old
+        ) {
           return coreError('organization.not_abandonable')
         }
         members.delete(parsed.data.userId)
@@ -257,6 +271,9 @@ export function startFakeCore(secret = 'fake-core-secret-0123456789abcdef-0123')
     clearScript: () => void scripted.splice(0),
     untilRequests: (count) => arrived.until(count),
     untilAbandoned: (count) => abandoned.until(count),
+    advanceClock: (ms) => {
+      skewMs += ms
+    },
     stop: async () => {
       await server.stop(true)
     },

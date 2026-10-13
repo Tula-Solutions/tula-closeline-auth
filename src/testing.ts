@@ -81,7 +81,7 @@ export function createTestDeps(
     signingKeys: createMemorySigningKeyStore(),
     secretBox: createSecretBox(masterKey(env)),
     keyedHash: createKeyedHash(masterKey(env)),
-    membership: createMemoryMembership(),
+    membership: createMemoryMembership(clock),
     users: new MemoryUserRepository(),
     flowAttempts: new MemoryFlowAttemptStore(),
     verificationTokens: new MemoryVerificationTokenStore(),
