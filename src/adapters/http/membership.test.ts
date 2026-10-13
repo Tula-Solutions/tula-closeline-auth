@@ -255,20 +255,19 @@ describe('retries', () => {
   )
 
   test('the retry pause honours the signal', async () => {
-    const { core } = connect()
-    const adapter = createHttpMembership({
-      baseUrl: core.url,
-      token: core.secret,
+    const controller = new AbortController()
+    // The warning is written just before the pause, so this aborts while the adapter is pausing
+    // and no request is in flight: only the pause itself can notice.
+    const { core, adapter } = connect({
       retryDelayMs: () => 60_000,
+      logger: { warn: () => controller.abort() },
     })
     core.script(json(503, {}))
-    const controller = new AbortController()
 
-    const pending = adapter.forUser(user(), controller.signal)
-    await core.untilRequests(1)
-    controller.abort()
+    await expect(adapter.forUser(user(), controller.signal)).rejects.toBeInstanceOf(
+      MembershipUnavailable
+    )
 
-    await expect(pending).rejects.toBeInstanceOf(MembershipUnavailable)
     expect(core.requests).toHaveLength(1)
   })
 })
@@ -284,7 +283,8 @@ describe('time and the caller giving up', () => {
   test.each(CALL_NAMES)(
     '%s cancels the request when the caller aborts, and does not retry',
     async (name) => {
-      const { core, adapter } = connect()
+      // Bounds far longer than the test may take, so only the abort can end the call.
+      const { core, adapter } = connect({ lookupTimeoutMs: 60_000, writeTimeoutMs: 60_000 })
       core.script({ kind: 'hang' }, { kind: 'hang' })
       const controller = new AbortController()
 
@@ -444,6 +444,29 @@ describe('what core can answer', () => {
     await expect(CALLS.acceptInvitation(adapter)).rejects.toBeInstanceOf(MembershipUnavailable)
     await expect(CALLS.acceptInvitation(adapter)).rejects.toBeInstanceOf(MembershipUnavailable)
   })
+
+  test.each([
+    [400, 'invitation.invalid'],
+    [404, 'invitation.invalid'],
+    [422, 'membership.already_member'],
+    [500, 'invitation.invalid'],
+  ] as const)(
+    'a %d with the body of %s is a status core does not use for it, so the body is not believed',
+    async (status, code) => {
+      const { core, adapter } = connect()
+      core.script(json(status, { error: { code, message: 'x' } }))
+      core.script(json(status, { error: { code, message: 'x' } }))
+
+      const accepted = await CALLS.acceptInvitation(adapter).catch((e: unknown) => e)
+      const created = await CALLS.createOrganization(adapter).catch((e: unknown) => e)
+
+      for (const error of [accepted, created]) {
+        expect(error).toBeInstanceOf(MembershipUnavailable)
+        expect(error).not.toBeInstanceOf(MembershipRefused)
+        expect(error).not.toBeInstanceOf(MembershipFault)
+      }
+    }
+  )
 
   test('a lookup names the status of a suspended and a deleted Organization', async () => {
     const { core, adapter } = connect()
