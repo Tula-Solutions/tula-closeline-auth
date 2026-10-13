@@ -25,7 +25,8 @@ Ported from the source product `tula-auth-and-user-management` (`apps/api`, `pac
 `conformance/`), read only. Ticket 1.7 named commit `46d13ba`; it was ported from `55e32edc` (a
 descendant; the later commits touch only out-of-scope areas). Ported as-is
 (rename of `TULA_MASTER_KEY` to `AUTH_MASTER_KEY` only): secret box, keyed hash, crypto and email
-helpers, the password rule engine, lockout policy, flow-attempt, verification-code and refresh
+helpers, the password rule engine (cut to the four rules the fixed policy runs, so each of its
+codes is in the contract), lockout policy, flow-attempt, verification-code and refresh
 logic. Adapted: ids and tenancy (`withEnvironment`, one fixed project), errors (the contract's
 `area.reason` envelope), the sign-up (an Organization name or an invitation, see below).
 
@@ -48,8 +49,14 @@ The shape in `.claude/COMMON.md` is built; modules are under `src/modules/<name>
   today. Call `reportSafely`, never it directly. 5xx errors reach it from the error handler; a
   4xx the deployment must fix (an account with no Organization) is reported by the flow.
 - `src/http/` is the middleware stack in `createBaseApp`. Modules build routes with
-  `createRouter()` and `errorResponse(...)`. `src/errors.ts` is this service's `area.reason`
-  registry; throw `fail(AUTH_ERRORS['...'])`.
+  `createRouter()` and `errorResponses([...codes])`. Error codes are not defined here: every
+  `area.reason` this service answers with is a key of `AUTH_ERRORS` (or the common `ERRORS`) in
+  `tula-closeline-contract`; a new or changed code is a contract release first. Throw
+  `fail(AUTH_ERRORS['...'])`; `src/errors.ts` holds only helpers, typed so `tsc` refuses any other
+  definition, and `src/error-codes.test.ts` fails on any `area.reason` literal in shipped source
+  that is not a key of a contract map. A route lists in its OpenAPI `responses` the codes its
+  handler, services and middleware can produce (`BODY_ERRORS` for a route with a body); change
+  the list with the code: `src/openapi-errors.test.ts` pins it.
 - Modules: `bootstrap` (the Region's one workspace, project and two environments, created under an
   advisory lock), `jwks` (keys, rotation, `/.well-known/jwks.json`), `token` (signs `at+jwt`),
   `flow` (sign-up and sign-in), `verification` (emailed codes), `password`, `membership` (the

@@ -1,7 +1,7 @@
 import { createRoute, type OpenAPIHono, z } from '@hono/zod-openapi'
 import type { Container } from '~/container'
 import { clientContext, noStore } from '~/http/client'
-import { errorResponse } from '~/http/responses'
+import { BODY_ERRORS, errorResponses } from '~/http/responses'
 import { createRouter } from '~/http/router'
 import type { AppEnv } from '~/http/types'
 import * as Bootstrap from '~/modules/bootstrap/service'
@@ -31,18 +31,6 @@ const startHeaders = z.object({
 })
 const idParams = z.object({ id: z.string().max(64) })
 
-const errors = {
-  400: errorResponse('The request is malformed.'),
-  404: errorResponse('The attempt does not exist, has ended, or the secret is wrong.'),
-  409: errorResponse('The attempt is not on this step.'),
-  422: errorResponse('The input is refused: address, password, code or invitation.'),
-  429: errorResponse('Too many tries; see `details.retryAfter` (seconds).'),
-  503: errorResponse(
-    'The Organization membership or mail service is unavailable; see `Retry-After`. The attempt and code still work.'
-  ),
-  500: errorResponse('Something went wrong on our side.'),
-}
-
 const ok = {
   200: {
     description: 'The attempt and its next step; tokens once it is complete.',
@@ -66,7 +54,22 @@ const signUp = createRoute({
     'or `invitationToken` (the user joins the inviting Organization). An address that already ' +
     'has an account gets the same answer and a notice instead of a code.',
   request: { headers: startHeaders, body: json(signUpRequestSchema) },
-  responses: { ...ok, ...errors },
+  responses: {
+    ...ok,
+    ...errorResponses([
+      ...BODY_ERRORS,
+      'email.invalid',
+      'password.too_short',
+      'password.too_long',
+      'password.contains_user_info',
+      'password.common',
+      'password.breached',
+      'verification.too_many_attempts',
+      'mail.unavailable',
+      'server.unavailable',
+      'server.internal',
+    ]),
+  },
 })
 
 const verifyEmail = createRoute({
@@ -78,7 +81,21 @@ const verifyEmail = createRoute({
     'Creates the account, its Organization membership and its first session in one step. If ' +
     'the membership cannot be made, no account is created and the code still works.',
   request: { params: idParams, headers: attemptHeaders, body: json(verifyEmailRequestSchema) },
-  responses: { ...ok, ...errors },
+  responses: {
+    ...ok,
+    ...errorResponses([
+      ...BODY_ERRORS,
+      'flow.not_found',
+      'flow.invalid_step',
+      'verification.invalid_code',
+      'verification.expired',
+      'verification.too_many_attempts',
+      'signup.invitation_invalid',
+      'signup.organization_name_invalid',
+      'membership.unavailable',
+      'server.internal',
+    ]),
+  },
 })
 
 const resend = createRoute({
@@ -87,7 +104,17 @@ const resend = createRoute({
   tags: ['sign-up'],
   summary: 'Send the code again',
   request: { params: idParams, headers: attemptHeaders },
-  responses: { ...ok, ...errors },
+  responses: {
+    ...ok,
+    ...errorResponses([
+      'request.invalid',
+      'flow.not_found',
+      'flow.invalid_step',
+      'verification.too_many_attempts',
+      'mail.unavailable',
+      'server.internal',
+    ]),
+  },
 })
 
 const signIn = createRoute({
@@ -97,7 +124,7 @@ const signIn = createRoute({
   summary: 'Start a sign-in',
   description: 'The answer is the same whether or not the address has an account.',
   request: { headers: startHeaders, body: json(signInRequestSchema) },
-  responses: { ...ok, ...errors },
+  responses: { ...ok, ...errorResponses([...BODY_ERRORS, 'server.internal']) },
 })
 
 const password = createRoute({
@@ -114,10 +141,19 @@ const password = createRoute({
   request: { params: idParams, headers: attemptHeaders, body: json(passwordRequestSchema) },
   responses: {
     ...ok,
-    401: errorResponse('The address or password is not right (the same answer for both).'),
-    403: errorResponse('The account is banned or has no Organization.'),
-    410: errorResponse('The account\u2019s Organization was deleted.'),
-    ...errors,
+    ...errorResponses([
+      ...BODY_ERRORS,
+      'flow.not_found',
+      'flow.invalid_step',
+      'auth.invalid_credentials',
+      'auth.user_banned',
+      'auth.no_organization',
+      'organization.deleted',
+      'rate.limited',
+      'membership.unavailable',
+      'server.unavailable',
+      'server.internal',
+    ]),
   },
 })
 
@@ -131,7 +167,7 @@ const policy = createRoute({
       description: 'The length limits of a password.',
       content: { 'application/json': { schema: passwordPolicySchema } },
     },
-    500: errorResponse('Something went wrong on our side.'),
+    ...errorResponses(['server.internal']),
   },
 })
 

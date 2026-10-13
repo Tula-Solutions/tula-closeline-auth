@@ -9,7 +9,7 @@ import {
 import { AppError } from 'tula-closeline-kit'
 import type { Container } from '~/container'
 import { clientContext, noStore } from '~/http/client'
-import { errorResponse } from '~/http/responses'
+import { BODY_ERRORS, errorResponses } from '~/http/responses'
 import { createRouter } from '~/http/router'
 import type { AppEnv } from '~/http/types'
 import * as Bootstrap from '~/modules/bootstrap/service'
@@ -24,6 +24,18 @@ import * as Auth from './service'
 const bearer = z.object({
   authorization: z.string().optional().openapi({ description: 'Bearer <access token>' }),
 })
+/** What a bearer access token can be refused with: the token itself, or its session's end. */
+const BEARER_ERRORS = [
+  'auth.unauthenticated',
+  'auth.token_expired',
+  'auth.token_invalid',
+  'auth.unavailable',
+  'session.revoked',
+  'session.expired',
+  'session.reuse_detected',
+  'server.internal',
+] as const
+
 const body = {
   required: true,
   content: { 'application/json': { schema: refreshRequestSchema } },
@@ -46,11 +58,18 @@ const refresh = createRoute({
       description: 'New tokens.',
       content: { 'application/json': { schema: sessionTokensSchema } },
     },
-    401: errorResponse('The refresh token is invalid, the session ended, or it was reused.'),
-    403: errorResponse('The account is banned or has no Organization.'),
-    410: errorResponse('The user\u2019s Organization was deleted; the session has ended.'),
-    503: errorResponse('The Organization membership service is unavailable; see `Retry-After`.'),
-    500: errorResponse('Something went wrong on our side.'),
+    ...errorResponses([
+      ...BODY_ERRORS,
+      'session.invalid_token',
+      'session.revoked',
+      'session.expired',
+      'session.reuse_detected',
+      'auth.user_banned',
+      'auth.no_organization',
+      'organization.deleted',
+      'membership.unavailable',
+      'server.internal',
+    ]),
   },
 })
 
@@ -63,7 +82,7 @@ const signOut = createRoute({
   request: { body },
   responses: {
     204: { description: 'Signed out.' },
-    500: errorResponse('Something went wrong on our side.'),
+    ...errorResponses([...BODY_ERRORS, 'server.internal']),
   },
 })
 
@@ -79,8 +98,7 @@ const sessionsRoute = createRoute({
       description: 'A page of sessions.',
       content: { 'application/json': { schema: pageSchema(sessionSummarySchema) } },
     },
-    401: errorResponse('No valid access token, or its session ended.'),
-    500: errorResponse('Something went wrong on our side.'),
+    ...errorResponses(['request.invalid', ...BEARER_ERRORS]),
   },
 })
 
