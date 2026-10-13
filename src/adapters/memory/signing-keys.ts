@@ -26,6 +26,13 @@ export function createMemorySigningKeyStore(): SigningKeyStore {
         .map((key) => ({ ...key.publicJwk, kid: key.id }))
     },
 
+    async active(environmentId) {
+      const found = keys.find(
+        (key) => key.environmentId === environmentId && key.status === 'active'
+      )
+      return found ? copy(found) : null
+    },
+
     async list(environmentId) {
       return keys
         .filter((key) => key.environmentId === environmentId)

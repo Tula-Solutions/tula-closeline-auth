@@ -1,11 +1,11 @@
-import { and, desc, eq } from 'drizzle-orm'
+import { and, desc, eq, gt, ne, or } from 'drizzle-orm'
 import { type Database, withEnvironment } from 'tula-closeline-db'
 import { signingKeys } from 'tula-closeline-db/schema'
 import { isUniqueViolation, LostRace } from '~/adapters/postgres/errors'
 import { type Jwk, jwkSchema } from '~/modules/jwks/schema'
 import {
-  canVerify,
   type NewSigningKey,
+  RETIRED_KEY_RETENTION_MS,
   type RotationPlan,
   type SigningKeyRecord,
   type SigningKeyStore,
@@ -58,14 +58,39 @@ export function createPostgresSigningKeyStore(db: Database): SigningKeyStore {
 
   return {
     async verificationKeys(environmentId, now, limit) {
-      const keys: Jwk[] = []
-      for (const row of await rows(environmentId)) {
-        const jwk = canVerify(row, now) ? jwkOf(row) : null
-        if (jwk && keys.length < limit) {
-          keys.push(jwk)
-        }
-      }
-      return keys
+      const cutoff = new Date(now.getTime() - RETIRED_KEY_RETENTION_MS)
+      const found = await withEnvironment(db, environmentId, (tx) =>
+        tx
+          .select({ id: signingKeys.id, publicJwk: signingKeys.publicJwk })
+          .from(signingKeys)
+          // The same rule as `canVerify`, applied in SQL so retired keys are never read.
+          .where(
+            and(
+              eq(signingKeys.environmentId, environmentId),
+              or(ne(signingKeys.status, 'retired'), gt(signingKeys.retiredAt, cutoff))
+            )
+          )
+          .orderBy(desc(signingKeys.createdAt), desc(signingKeys.id))
+          .limit(limit)
+      )
+      return found.flatMap((row) => {
+        const jwk = jwkOf(row)
+        return jwk ? [jwk] : []
+      })
+    },
+
+    async active(environmentId) {
+      const [row] = await withEnvironment(db, environmentId, (tx) =>
+        tx
+          .select(columns)
+          .from(signingKeys)
+          .where(
+            and(eq(signingKeys.environmentId, environmentId), eq(signingKeys.status, 'active'))
+          )
+          .limit(1)
+      )
+      const jwk = row ? jwkOf(row) : null
+      return row && jwk ? { ...row, publicJwk: jwk } : null
     },
 
     async list(environmentId) {

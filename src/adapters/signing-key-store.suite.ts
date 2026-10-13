@@ -57,6 +57,47 @@ export function signingKeyStoreSuite(name: string, make: () => Promise<SigningKe
     })
     const env = () => h.environments[0].environmentId
 
+    test('the active key is read on its own: one record, or none', async () => {
+      expect(await h.store.active(env())).toBeNull()
+      await h.store.insert(env(), [
+        keyOf(h, 1, 'active'),
+        keyOf(h, 2, 'next'),
+        keyOf(h, 3, 'retired', new Date(T0.getTime() - 1)),
+      ])
+
+      const active = await h.store.active(env())
+
+      expect(active?.id).toBe(keyOf(h, 1, 'active').id)
+      expect(active?.privateKeyCiphertext).toBe('v1.sealed.1')
+      expect(await h.store.active(h.environments[1].environmentId)).toBeNull()
+    })
+
+    test('a retired key past its retention is left out by the store, not by the caller', async () => {
+      const keys = [keyOf(h, 1, 'active'), keyOf(h, 2, 'next')]
+      await h.store.insert(env(), keys)
+      let at = T0
+      // 30 rotations: 30 retired keys, only the last few inside the retention window.
+      for (let n = 0; n < 30; n++) {
+        at = new Date(at.getTime() + 60_000 * 20)
+        const current = await h.store.active(env())
+        const upcoming = (await h.store.list(env())).find((key) => key.status === 'next')
+        await h.store.rotate(
+          env(),
+          {
+            retireId: current?.id ?? '',
+            activateId: upcoming?.id ?? '',
+            next: keyOf(h, 10 + n, 'next', at),
+          },
+          at
+        )
+      }
+
+      const published = await h.store.verificationKeys(env(), at, 20)
+
+      // next, active, and the two retired within the last 30 minutes (now and 20 minutes ago).
+      expect(published).toHaveLength(4)
+    })
+
     test('a second writer cannot take the active or next slot, and nothing of its batch lands', async () => {
       expect(await h.store.insert(env(), [keyOf(h, 1, 'active'), keyOf(h, 2, 'next')])).toBe(true)
 

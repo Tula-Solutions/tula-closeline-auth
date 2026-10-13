@@ -65,13 +65,22 @@ export interface RotationPlan {
  */
 export interface SigningKeyStore {
   /**
-   * Public keys that may verify tokens at `now`, newest first, at most `limit`.
+   * Public keys that may verify tokens at `now`, newest first, at most `limit`. The retirement
+   * window and the limit are applied by the store, so a long-retired key is never read.
    *
    * @param environmentId - The environment.
    * @param now - The current time, for the retirement window.
    * @param limit - The most keys to return.
    */
   verificationKeys(environmentId: string, now: Date, limit: number): Promise<Jwk[]>
+
+  /**
+   * The key that signs tokens now, read on its own (one row) because sign-in and refresh call it:
+   * the cost does not grow with the keys retired over the years.
+   *
+   * @returns The `active` key with its sealed private key, or `null` when none exists yet.
+   */
+  active(environmentId: string): Promise<SigningKeyRecord | null>
 
   /** Every key of an environment, newest first, including long-retired ones, with ciphertext. */
   list(environmentId: string): Promise<SigningKeyRecord[]>

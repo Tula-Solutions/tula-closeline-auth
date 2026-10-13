@@ -117,8 +117,10 @@ scenarios against real Postgres as the `closeline_auth` role (`POSTGRES_PORT` mo
 
 The per-request middleware stack (`createBaseApp`), `/healthz`, and session refresh
 (`Sessions.refresh`: each signed-in device calls it every minute). Refresh is O(1) in users,
-sessions and Organizations: one token lookup by hash, one membership read, one signature, one
-rotation. Budgets are in `bench/`.
+sessions, Organizations and signing keys: one token lookup by hash, one user lookup by id, one
+active-key read (`SigningKeyStore.active`, one row however many keys were retired), one
+membership read to core, one signature, one rotation. The JWKS and bearer routes read at most 20
+keys, bounded in SQL by retirement time and a limit. Budgets are in `bench/`.
 
 A benchmark times `measure(operation)`: a warm-up, then several batches, gated on the fastest, so a
 noisy runner cannot fail it but a real regression (every batch slower) does. Budget is about 5x the

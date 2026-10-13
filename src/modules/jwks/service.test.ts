@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { createSecretBox } from '~/lib/secret-box'
 import * as Bootstrap from '~/modules/bootstrap/service'
+import * as Tokens from '~/modules/token/service'
+import type { SigningKeyStore } from '~/ports/signing-key-store'
 import { createReadyDeps } from '~/testing'
 import * as Jwks from './service'
 
@@ -134,5 +136,42 @@ describe('rotation', () => {
     const results = await Promise.allSettled([Jwks.rotate(deps, tenant), Jwks.rotate(deps, tenant)])
 
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+  })
+})
+
+describe('what signing reads', () => {
+  /** Wraps a key store to count which reads happen and how many records each hands back. */
+  function counting(store: SigningKeyStore) {
+    const reads = { list: 0, active: 0, recordsRead: 0 }
+    const wrapped: SigningKeyStore = {
+      ...store,
+      async list(environmentId) {
+        const records = await store.list(environmentId)
+        reads.list += 1
+        reads.recordsRead += records.length
+        return records
+      },
+      async active(environmentId) {
+        const record = await store.active(environmentId)
+        reads.active += 1
+        reads.recordsRead += record ? 1 : 0
+        return record
+      },
+    }
+    return { wrapped, reads }
+  }
+
+  test('with 50 retired keys, signing reads the one active key and never lists them all', async () => {
+    const { deps, tenant } = await setup()
+    await Jwks.ensureKeys(deps, tenant)
+    for (let i = 0; i < 50; i++) {
+      deps.clock.advance('10m')
+      await Jwks.rotate(deps, tenant)
+    }
+    const { wrapped, reads } = counting(deps.signingKeys)
+
+    await Tokens.signer({ ...deps, signingKeys: wrapped }, tenant)
+
+    expect(reads).toEqual({ list: 0, active: 1, recordsRead: 1 })
   })
 })

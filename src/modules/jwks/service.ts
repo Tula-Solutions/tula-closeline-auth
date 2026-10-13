@@ -105,8 +105,7 @@ export async function activeSigningKey(
   deps: KeyDeps,
   tenant: Tenant
 ): Promise<{ kid: string; privateKey: CryptoKey }> {
-  const find = async () =>
-    (await deps.signingKeys.list(tenant.environmentId)).find((key) => key.status === 'active')
+  const find = () => deps.signingKeys.active(tenant.environmentId)
   let active = await find()
   if (!active) {
     await ensureKeys(deps, tenant)
