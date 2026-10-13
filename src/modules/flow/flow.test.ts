@@ -445,3 +445,52 @@ describe('sign-in', () => {
     expect(sessions).toHaveLength(1)
   })
 })
+
+describe('text the database cannot store', () => {
+  test.each([
+    ['sign-in identifier', '/v1/client/sign-ins', { identifier: 'maya\u0000@northline.app' }],
+    [
+      'sign-up email',
+      '/v1/client/sign-ups',
+      { email: 'maya\u0000@northline.app', password: PASSWORD, organizationName: 'Northline' },
+    ],
+    [
+      'first name',
+      '/v1/client/sign-ups',
+      {
+        email: 'a@northline.app',
+        password: PASSWORD,
+        firstName: 'Ma\u0000ya',
+        organizationName: 'Northline',
+      },
+    ],
+    [
+      'last name',
+      '/v1/client/sign-ups',
+      {
+        email: 'a@northline.app',
+        password: PASSWORD,
+        lastName: 'Pa\u0000tel',
+        organizationName: 'Northline',
+      },
+    ],
+    [
+      'organization name',
+      '/v1/client/sign-ups',
+      { email: 'a@northline.app', password: PASSWORD, organizationName: 'North\u0000line' },
+    ],
+    [
+      'invitation token',
+      '/v1/client/sign-ups',
+      { email: 'a@northline.app', password: PASSWORD, invitationToken: 'inv\u0000-1' },
+    ],
+  ])('a NUL in the %s is a 400, not an unexpected error', async (_field, path, body) => {
+    const { deps, app } = await setup()
+
+    const reply = await call(app, 'POST', path, { body })
+
+    expect(reply.status).toBe(400)
+    expect(reply.body).toMatchObject({ error: { code: 'request.invalid' } })
+    expect(deps.reported).toHaveLength(0)
+  })
+})

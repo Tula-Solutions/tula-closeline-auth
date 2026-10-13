@@ -21,24 +21,40 @@ export const ATTEMPT_SECRET_PREFIX = 'tula_at_'
 /** The kinds of client that hold a session. */
 export const clientSchema = z.enum(['web', 'ios', 'android', 'server'])
 
+/**
+ * Whether a free-text value can be stored: Postgres text and jsonb refuse a NUL character, which
+ * would otherwise surface as an unexpected 500 from a route anyone can call.
+ */
+export const hasNoNul = (value: string): boolean => !value.includes('\u0000')
+
+/** The validation message for {@link hasNoNul}. */
+export const NO_NUL_MESSAGE = 'Must not contain a NUL character.'
+
 /** What a sign-up request is: a person, and exactly one way to get an Organization. */
 export const signUpRequestSchema = z
   .strictObject({
-    email: z.string().min(1).max(320).openapi({ example: 'maya@northline.app' }),
+    email: z
+      .string()
+      .min(1)
+      .max(320)
+      .refine(hasNoNul, NO_NUL_MESSAGE)
+      .openapi({ example: 'maya@northline.app' }),
     password: z.string().min(1).max(16_384),
-    firstName: z.string().trim().max(100).optional(),
-    lastName: z.string().trim().max(100).optional(),
+    firstName: z.string().trim().max(100).refine(hasNoNul, NO_NUL_MESSAGE).optional(),
+    lastName: z.string().trim().max(100).refine(hasNoNul, NO_NUL_MESSAGE).optional(),
     organizationName: z
       .string()
       .trim()
       .min(1)
       .max(120)
+      .refine(hasNoNul, NO_NUL_MESSAGE)
       .optional()
       .openapi({ description: 'Creates this Organization with the new user as its Owner.' }),
     invitationToken: z
       .string()
       .min(1)
       .max(512)
+      .refine(hasNoNul, NO_NUL_MESSAGE)
       .optional()
       .openapi({ description: 'Joins the Organization that issued this invitation.' }),
   })
@@ -58,7 +74,7 @@ export const verifyEmailRequestSchema = z
 
 /** Starting a sign-in names the account; whether it exists is not looked at yet. */
 export const signInRequestSchema = z
-  .strictObject({ identifier: z.string().min(1).max(320) })
+  .strictObject({ identifier: z.string().min(1).max(320).refine(hasNoNul, NO_NUL_MESSAGE) })
   .openapi('SignInRequest')
 
 /** The password step of a sign-in. */

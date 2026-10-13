@@ -1,5 +1,12 @@
 import { createRoute, type OpenAPIHono, z } from '@hono/zod-openapi'
-import { decodeCursor, encodeCursor, pageQuerySchema, pageSchema } from 'tula-closeline-contract'
+import {
+  decodeCursor,
+  ERRORS,
+  encodeCursor,
+  pageQuerySchema,
+  pageSchema,
+} from 'tula-closeline-contract'
+import { AppError } from 'tula-closeline-kit'
 import type { Container } from '~/container'
 import { clientContext, noStore } from '~/http/client'
 import { errorResponse } from '~/http/responses'
@@ -73,7 +80,11 @@ const sessionsRoute = createRoute({
   },
 })
 
-const position = z.object({ t: z.number(), i: z.string() })
+/**
+ * A cursor's position as the database can use it: a time inside the valid Date range and a uuid,
+ * so a forged cursor is refused at the edge instead of failing inside a query.
+ */
+const position = z.object({ t: z.number().int().min(0).max(8.64e15), i: z.guid() })
 
 /** Refresh, sign-out, the signed-in user and their sessions. */
 export function createSessionRouter(container: Container): OpenAPIHono<AppEnv> {
@@ -102,6 +113,14 @@ export function createSessionRouter(container: Container): OpenAPIHono<AppEnv> {
     const { session } = await Auth.authenticate(container, tenant(), c.req.header('authorization'))
     const query = c.req.valid('query')
     const decoded = query.cursor ? decodeCursor(query.cursor, position) : undefined
+    if (query.cursor && !decoded) {
+      throw new AppError({
+        code: ERRORS['request.invalid'].code,
+        status: ERRORS['request.invalid'].status,
+        message: ERRORS['request.invalid'].message,
+        details: { issues: [{ path: 'cursor', code: 'invalid_value', message: 'Not a cursor.' }] },
+      })
+    }
     const { sessions, hasMore } = await Sessions.list(
       container,
       tenant(),

@@ -317,17 +317,46 @@ describe('listing sessions', () => {
     })
   })
 
-  test('does not list ended sessions, and ignores a cursor that was tampered with', async () => {
+  test('does not list ended sessions', async () => {
     const { deps, app, signIn, refreshToken } = await setup()
     deps.clock.advance('1s')
     const second = await signIn()
     await call(app, 'POST', '/v1/client/sessions/sign-out', { body: { refreshToken } })
 
-    const page = await call(app, 'GET', '/v1/client/sessions?cursor=%25%25%25', {
+    const page = await call(app, 'GET', '/v1/client/sessions', {
       accessToken: text(second.body, 'session.accessToken'),
     })
 
     expect(page.status).toBe(200)
     expect(at(page.body, 'items')).toHaveLength(1)
+  })
+})
+
+describe('a cursor the database cannot use', () => {
+  const position = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url')
+
+  test.each([
+    ['a time outside the valid date range', { t: 1e20, i: '0190c0de-0000-7000-8000-000000000000' }],
+    ['a negative time', { t: -1, i: '0190c0de-0000-7000-8000-000000000000' }],
+    ['a fractional time', { t: 1.5, i: '0190c0de-0000-7000-8000-000000000000' }],
+    ['an id that is not a uuid', { t: 1_700_000_000_000, i: 'x' }],
+  ])('%s is a 400 and is not reported', async (_name, value) => {
+    const { deps, app, accessToken } = await setup()
+
+    const page = await call(app, 'GET', `/v1/client/sessions?cursor=${position(value)}`, {
+      accessToken,
+    })
+
+    expect(page.status).toBe(400)
+    expect(page.body).toMatchObject({ error: { code: 'request.invalid' } })
+    expect(deps.reported).toHaveLength(0)
+  })
+
+  test('a cursor the service did not issue is refused rather than silently read as the first page', async () => {
+    const { app, accessToken } = await setup()
+
+    const page = await call(app, 'GET', '/v1/client/sessions?cursor=%25%25%25', { accessToken })
+
+    expect(page.status).toBe(400)
   })
 })

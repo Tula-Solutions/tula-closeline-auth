@@ -69,3 +69,38 @@ describe('sessions against a real Postgres', () => {
     expect(at(me.body, 'error.code')).toBe('session.revoked')
   })
 })
+
+describe('input Postgres would refuse, over a real Postgres', () => {
+  test('forged cursors and a NUL in a free-text field are 4xx and never reported', async () => {
+    const { app, done } = await signedUp('forged@northline.app')
+    const accessToken = text(done.body, 'session.accessToken')
+    const forged = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url')
+    deps.reported.length = 0
+
+    const replies = [
+      await call(app, 'GET', `/v1/client/sessions?cursor=${forged({ t: 1e20, i: 'x' })}`, {
+        accessToken,
+      }),
+      await call(
+        app,
+        'GET',
+        `/v1/client/sessions?cursor=${forged({ t: 1e20, i: '0190c0de-0000-7000-8000-000000000000' })}`,
+        { accessToken }
+      ),
+      await call(app, 'GET', `/v1/client/sessions?cursor=${forged({ t: 5, i: 'not-a-uuid' })}`, {
+        accessToken,
+      }),
+      await call(app, 'POST', '/v1/client/sign-ins', { body: { identifier: 'a\u0000b' } }),
+      await call(app, 'POST', '/v1/client/sign-ups', {
+        body: {
+          email: 'nul@northline.app',
+          password: 'correct horse battery',
+          organizationName: 'North\u0000line',
+        },
+      }),
+    ]
+
+    expect(replies.map((r) => r.status)).toEqual([400, 400, 400, 400, 400])
+    expect(deps.reported).toHaveLength(0)
+  })
+})
