@@ -70,6 +70,25 @@ async function age(seconds: number): Promise<void> {
 
 const FAR = 3_600
 
+/**
+ * The service stamps a case with the attempt's expiry from its own clock, which in these tests is
+ * the fixed one (January 2026), so by the database's clock every case would be due at once.
+ * Re-stamps the case as a real clock would have: the attempt expires in 10 minutes, plus grace.
+ */
+async function onDatabaseClock(caseId: string): Promise<void> {
+  const tenant = Bootstrap.requireTenant(deps)
+  await inEnvironment(owner, tenant.environmentId, (query) =>
+    query(
+      `update auth.abandon_cases
+          set attempt_expires_at = clock_timestamp() + interval '10 minutes',
+              next_attempt_at = clock_timestamp() + interval '10 minutes'
+                                + make_interval(secs => $2::float8 / 1000)
+        where id = $1`,
+      [caseId, Abandon.ABANDON_GRACE_MS]
+    )
+  )
+}
+
 async function cases(): Promise<Record<string, unknown>[]> {
   const tenant = Bootstrap.requireTenant(deps)
   const result = await withEnvironment(deps.db, tenant.environmentId, (tx) =>
@@ -105,6 +124,7 @@ async function crash() {
   const reply = await one.verify()
   deps.users.create = create
   expect(reply.status).toBe(500)
+  await onDatabaseClock(text(one.started.body, 'id'))
   return one
 }
 
@@ -272,6 +292,7 @@ describe('the abandon sweep against a real Postgres', () => {
   test('a spent case is given up, and resolved cases are purged after a day', async () => {
     const tenant = Bootstrap.requireTenant(deps)
     await crash()
+    expect(await cases()).toHaveLength(1)
     await age(FAR)
     await inEnvironment(owner, tenant.environmentId, (query) =>
       query('update auth.abandon_cases set attempts = 100 where resolved_at is null')
