@@ -28,11 +28,20 @@ function settled(
   const limiter = createPostgresRateLimiter(options)
   return {
     lockout: {
-      attempt: async (key, policy, now) => (await settle(), lockout.attempt(key, policy, now)),
-      clear: async (key) => (await settle(), lockout.clear(key)),
+      attempt: async (key, policy, now) => {
+        await settle()
+        return lockout.attempt(key, policy, now)
+      },
+      clear: async (key) => {
+        await settle()
+        return lockout.clear(key)
+      },
     },
     rateLimiter: {
-      hit: async (key, limit, windowMs) => (await settle(), limiter.hit(key, limit, windowMs)),
+      hit: async (key, limit, windowMs) => {
+        await settle()
+        return limiter.hit(key, limit, windowMs)
+      },
     },
   }
 }
