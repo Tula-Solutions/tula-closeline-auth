@@ -91,7 +91,7 @@ function userInfoTokens(info: PasswordUserInfo): string[] {
  *
  * @example
  * ```ts
- * const { ok, checks } = evaluatePassword(PASSWORD_POLICY_PRESETS.recommended, 'correct horse')
+ * const { ok, checks } = evaluatePassword(PASSWORD_POLICY, 'correct horse')
  * ```
  */
 export function evaluatePassword(

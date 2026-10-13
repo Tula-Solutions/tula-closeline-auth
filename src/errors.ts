@@ -13,16 +13,27 @@ import { AppError } from 'tula-closeline-kit'
  */
 export type ServiceErrorCode = AuthErrorCode | CommonErrorCode
 
-/** Builds the AppError for a registry entry; `details` is returned to the client, so no secrets. */
+/** Every definition this service may answer with, by code: the contract's, never a local one. */
+export const DEFINITIONS: Readonly<Record<ServiceErrorCode, ErrorDefinition<ServiceErrorCode>>> = {
+  ...ERRORS,
+  ...AUTH_ERRORS,
+}
+
+/**
+ * Builds the AppError for a registry entry; `details` is returned to the client, so no secrets.
+ * Only the code of `definition` is read: the status and message come from the contract's own
+ * entry for that code, so a definition written by hand cannot change what a code means.
+ */
 export function fail(
   definition: ErrorDefinition<ServiceErrorCode>,
   details?: Record<string, unknown>,
   cause?: unknown
 ): AppError {
+  const { code, status, message } = DEFINITIONS[definition.code]
   return new AppError({
-    code: definition.code,
-    status: definition.status,
-    message: definition.message,
+    code,
+    status,
+    message,
     ...(details ? { details } : {}),
     ...(cause === undefined ? {} : { cause }),
   })

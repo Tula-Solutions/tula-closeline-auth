@@ -34,7 +34,8 @@ function listed(path: string, method: string): Record<string, string[]> {
 /**
  * The codes each route can answer with, read from its handler, the services it calls and the
  * middleware in front of it: a route lists what it can produce, not every code of the contract.
- * A request body adds `request.invalid`, `request.too_large` and `request.unsupported_media_type`; every route can answer 500.
+ * A request body adds `request.invalid` and `request.unsupported_media_type`; the body limit is in
+ * front of every route, so every route can answer 413 and 500.
  */
 const ROUTES: [method: string, path: string, codes: Record<string, string[]>][] = [
   [
@@ -84,6 +85,7 @@ const ROUTES: [method: string, path: string, codes: Record<string, string[]>][] 
       '400': ['request.invalid'],
       '404': ['flow.not_found'],
       '409': ['flow.invalid_step'],
+      '413': ['request.too_large'],
       '429': ['verification.too_many_attempts'],
       '500': ['server.internal'],
       '503': ['mail.unavailable'],
@@ -116,7 +118,11 @@ const ROUTES: [method: string, path: string, codes: Record<string, string[]>][] 
       '503': ['membership.unavailable', 'server.unavailable'],
     },
   ],
-  ['get', '/v1/client/password-policy', { '500': ['server.internal'] }],
+  [
+    'get',
+    '/v1/client/password-policy',
+    { '413': ['request.too_large'], '500': ['server.internal'] },
+  ],
   [
     'post',
     '/v1/client/sessions/refresh',
@@ -159,6 +165,7 @@ const ROUTES: [method: string, path: string, codes: Record<string, string[]>][] 
         'session.reuse_detected',
         'session.revoked',
       ],
+      '413': ['request.too_large'],
       '500': ['server.internal'],
       '503': ['auth.unavailable'],
     },
@@ -175,13 +182,14 @@ const ROUTES: [method: string, path: string, codes: Record<string, string[]>][] 
         'session.reuse_detected',
         'session.revoked',
       ],
+      '413': ['request.too_large'],
       '500': ['server.internal'],
       '503': ['auth.unavailable'],
     },
   ],
-  ['get', '/.well-known/jwks.json', { '500': ['server.internal'] }],
-  ['get', '/healthz', { '500': ['server.internal'] }],
-  ['get', '/readyz', { '500': ['server.internal'] }],
+  ['get', '/.well-known/jwks.json', { '413': ['request.too_large'], '500': ['server.internal'] }],
+  ['get', '/healthz', { '413': ['request.too_large'], '500': ['server.internal'] }],
+  ['get', '/readyz', { '413': ['request.too_large'], '500': ['server.internal'] }],
 ]
 
 describe('each route lists the error codes it can answer with, from the contract', () => {
@@ -213,5 +221,25 @@ describe('each route lists the error codes it can answer with, from the contract
       },
     })
     expect(response?.description).toContain('`auth.invalid_credentials`')
+  })
+
+  test('a route lists 413 exactly when an over-size request body is refused there', async () => {
+    const deps = createTestDeps()
+    const app = createApp(deps)
+    const body = 'x'.repeat(deps.env.MAX_REQUEST_BODY_BYTES + 1)
+    const refused: Record<string, boolean> = {}
+    const lists413: Record<string, boolean> = {}
+
+    for (const [method, path, codes] of ROUTES) {
+      const response = await app.request(path.replace('{id}', 'a'), {
+        method: method.toUpperCase(),
+        headers: { 'content-type': 'application/json', 'content-length': String(body.length) },
+        body,
+      })
+      refused[`${method} ${path}`] = response.status === 413
+      lists413[`${method} ${path}`] = codes['413'] !== undefined
+    }
+
+    expect(refused).toEqual(lists413)
   })
 })

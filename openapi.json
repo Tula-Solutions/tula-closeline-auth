@@ -306,6 +306,49 @@
               }
             }
           },
+          "413": {
+            "description": "`request.too_large`: The request body is too large.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "request.too_large": {
+                    "value": {
+                      "error": {
+                        "code": "request.too_large",
+                        "message": "The request body is too large."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": ["code", "message"]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
           "500": {
             "description": "`server.internal`: Something went wrong on our side.",
             "content": {
@@ -387,6 +430,49 @@
                     }
                   },
                   "required": ["status", "checks"]
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`request.too_large`: The request body is too large.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "request.too_large": {
+                    "value": {
+                      "error": {
+                        "code": "request.too_large",
+                        "message": "The request body is too large."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": ["code", "message"]
+                    }
+                  },
+                  "required": ["error"]
                 }
               }
             }
@@ -522,6 +608,49 @@
                     }
                   },
                   "required": ["keys"]
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`request.too_large`: The request body is too large.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "request.too_large": {
+                    "value": {
+                      "error": {
+                        "code": "request.too_large",
+                        "message": "The request body is too large."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": ["code", "message"]
+                    }
+                  },
+                  "required": ["error"]
                 }
               }
             }
@@ -1607,6 +1736,49 @@
               }
             }
           },
+          "413": {
+            "description": "`request.too_large`: The request body is too large.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "request.too_large": {
+                    "value": {
+                      "error": {
+                        "code": "request.too_large",
+                        "message": "The request body is too large."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": ["code", "message"]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
           "429": {
             "description": "`verification.too_many_attempts`: Too many wrong codes. Ask for a new one.",
             "content": {
@@ -2516,6 +2688,49 @@
               }
             }
           },
+          "413": {
+            "description": "`request.too_large`: The request body is too large.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "request.too_large": {
+                    "value": {
+                      "error": {
+                        "code": "request.too_large",
+                        "message": "The request body is too large."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": ["code", "message"]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
           "500": {
             "description": "`server.internal`: Something went wrong on our side.",
             "content": {
@@ -3357,6 +3572,49 @@
               }
             }
           },
+          "413": {
+            "description": "`request.too_large`: The request body is too large.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "request.too_large": {
+                    "value": {
+                      "error": {
+                        "code": "request.too_large",
+                        "message": "The request body is too large."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": ["code", "message"]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
           "500": {
             "description": "`server.internal`: Something went wrong on our side.",
             "content": {
@@ -3524,6 +3782,49 @@
                       "error": {
                         "code": "session.revoked",
                         "message": "This session has ended."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": ["code", "message"]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`request.too_large`: The request body is too large.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "request.too_large": {
+                    "value": {
+                      "error": {
+                        "code": "request.too_large",
+                        "message": "The request body is too large."
                       }
                     }
                   }

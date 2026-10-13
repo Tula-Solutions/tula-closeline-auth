@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { Glob } from 'bun'
-import { AUTH_ERRORS, CORE_ERRORS, ERRORS } from 'tula-closeline-contract'
-import { fail } from '~/errors'
+import { AUTH_ERRORS, CORE_ERRORS, ERRORS, errorCodeSchema } from 'tula-closeline-contract'
+import { fail, rateLimited } from '~/errors'
 
 /**
  * Every `area.reason` code this service answers with is defined in `tula-closeline-contract`
@@ -12,9 +12,6 @@ import { fail } from '~/errors'
  */
 
 const SOURCE = new URL('.', import.meta.url).pathname
-
-/** A string literal shaped like an error code: `area.reason`, lower-case words and underscores. */
-const CODE_SHAPE = /^[a-z]+(?:_[a-z]+)*\.[a-z]+(?:_[a-z]+)*$/
 
 /** Comments and string literals, in source order, so a literal inside a comment is skipped. */
 const TOKENS = /\/\*[\s\S]*?\*\/|\/\/[^\n]*|(["'`])((?:\\.|(?!\1)[^\\])*)\1/g
@@ -35,7 +32,8 @@ function codeLiterals(source: string): string[] {
   const found: string[] = []
   for (const match of source.matchAll(TOKENS)) {
     const text = match[2]
-    if (text !== undefined && CODE_SHAPE.test(text)) {
+    // The contract's own code pattern, so a code with a digit (`oauth2.denied`) is seen too.
+    if (text !== undefined && errorCodeSchema.safeParse(text).success) {
       found.push(text)
     }
   }
@@ -87,17 +85,37 @@ test('the scan sees a stray code, so it cannot pass by finding nothing', () => {
     "const a = 'auth.invalid_credentials'",
     'const b = `made.up_code`',
     "const url = 'https://example.com/a.b'",
+    "const c = 'oauth2.denied'",
   ].join('\n')
 
-  expect(codeLiterals(source)).toEqual(['auth.invalid_credentials', 'made.up_code'])
+  expect(codeLiterals(source)).toEqual([
+    'auth.invalid_credentials',
+    'made.up_code',
+    'oauth2.denied',
+  ])
 })
 
 test('fail takes the contract definitions of this service and nothing else', () => {
   expect(fail(AUTH_ERRORS['flow.not_found']).code).toBe('flow.not_found')
   expect(fail(ERRORS['rate.limited']).status).toBe(429)
 
+  // The lines below do not compile; at run time they are refused too, as no entry is found.
   // @ts-expect-error a code of core's is not one auth answers with
-  fail(CORE_ERRORS['invitation.invalid'])
+  expect(() => fail(CORE_ERRORS['invitation.invalid'])).toThrow()
   // @ts-expect-error a definition written here is not in the contract
-  fail({ code: 'made.up_code', status: 400, message: 'No.' })
+  expect(() => fail({ code: 'made.up_code', status: 400, message: 'No.' })).toThrow()
+})
+
+test('fail and rateLimited answer with the contract definition of the code, whatever status and message are passed', () => {
+  const forged = { code: 'flow.not_found', status: 200, message: 'Nothing to see.' } as const
+
+  expect(fail(forged)).toMatchObject({
+    code: 'flow.not_found',
+    status: AUTH_ERRORS['flow.not_found'].status,
+    message: AUTH_ERRORS['flow.not_found'].message,
+  })
+  expect(rateLimited({ ...forged, code: 'rate.limited' }, 1000)).toMatchObject({
+    status: ERRORS['rate.limited'].status,
+    message: ERRORS['rate.limited'].message,
+  })
 })
