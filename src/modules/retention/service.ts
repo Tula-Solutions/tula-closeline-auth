@@ -1,6 +1,8 @@
-import type { Container } from '~/container'
+import { type Container, reportSafely } from '~/container'
 import { describeError } from '~/describe-error'
+import { resolveRequestId } from '~/http/request-id'
 import { withTimeout } from '~/lib/timeout'
+import { MEMBERSHIP_TIMEOUT_MS } from '~/modules/membership/service'
 import type { Tenant } from '~/ports/fixed-project'
 
 /** The name instances take turns on, so only one purges at a time. */
@@ -9,8 +11,16 @@ export const RETENTION_LOCK = 'retention'
 /** What retention needs from the container. */
 export type RetentionDeps = Pick<
   Container,
-  'env' | 'clock' | 'logger' | 'flowAttempts' | 'verificationTokens' | 'exclusive'
+  'env' | 'clock' | 'logger' | 'flowAttempts' | 'verificationTokens' | 'exclusive' | 'reportError'
 >
+
+/**
+ * How long past its expiry an attempt or code is kept: the time core is given to answer. A
+ * sign-up that checked its code just before expiry is still waiting on core and writes its
+ * account and spends the code afterwards, so a purge that ran in between would turn a sign-up
+ * that worked into a 409.
+ */
+export const PURGE_GRACE_MS = MEMBERSHIP_TIMEOUT_MS
 
 /** How many rows one purge removed, by kind. */
 export type PurgeResult = { attempts: number; tokens: number }
@@ -26,9 +36,23 @@ class RunTimedOut extends Error {
   }
 }
 
+function graceBefore(now: Date): Date {
+  return new Date(now.getTime() - PURGE_GRACE_MS)
+}
+
+/** Tells the error tracker a run failed; the error carries no row data, only that it failed. */
+function reportFailure(deps: RetentionDeps, what: string, cause: unknown): void {
+  reportSafely(deps, new Error(`retention run ${what}`, { cause }), {
+    requestId: resolveRequestId(undefined),
+    method: 'RETENTION',
+    path: 'retention',
+    status: 500,
+  })
+}
+
 /**
- * Removes expired sign-in attempts (and, by cascade, their codes) and then expired verification
- * codes, `RETENTION_BATCH_SIZE` rows per statement, repeating while a batch comes back full, so
+ * Removes sign-in attempts (and, by cascade, their codes) and then verification codes that have
+ * been expired for longer than {@link PURGE_GRACE_MS}, `RETENTION_BATCH_SIZE` rows per statement, repeating while a batch comes back full, so
  * no statement holds locks for long however large the backlog. Stops between batches when
  * `signal` aborts.
  */
@@ -42,12 +66,13 @@ export async function purgeExpired(
   const sweeps = [
     {
       key: 'attempts',
-      delete: (now: Date) => deps.flowAttempts.deleteExpired(tenant.environmentId, now, limit),
+      delete: (now: Date) =>
+        deps.flowAttempts.deleteExpired(tenant.environmentId, graceBefore(now), limit),
     },
     {
       key: 'tokens',
       delete: (now: Date) =>
-        deps.verificationTokens.deleteExpired(tenant.environmentId, now, limit),
+        deps.verificationTokens.deleteExpired(tenant.environmentId, graceBefore(now), limit),
     },
   ] as const
   for (const sweep of sweeps) {
@@ -67,8 +92,8 @@ export async function purgeExpired(
 
 /**
  * One scheduled run: takes the cross-instance lock, purges, and gives up after
- * `RETENTION_RUN_TIMEOUT_MS`. It never throws; a failure is logged (without row data) and the
- * next interval tries again.
+ * `RETENTION_RUN_TIMEOUT_MS`. It never throws; a failure is logged and reported (without row data)
+ * and the next interval tries again.
  */
 export async function runOnce(
   deps: RetentionDeps,
@@ -96,6 +121,7 @@ export async function runOnce(
     deps.logger.error(timedOut ? 'retention run timed out' : 'retention run failed', {
       ...(timedOut ? {} : { error: describeError(error) }),
     })
+    reportFailure(deps, timedOut ? 'timed out' : 'failed', timedOut ? undefined : error)
     return timedOut ? 'timed_out' : 'failed'
   } finally {
     controller.abort()

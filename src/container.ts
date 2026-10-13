@@ -118,7 +118,11 @@ export type Container = {
  * Calls `reportError` so that it can neither throw nor leave a rejected promise behind, even if
  * an implementation wrongly went async.
  */
-export function reportSafely(container: Container, error: unknown, context: ErrorContext): void {
+export function reportSafely(
+  container: Pick<Container, 'reportError'>,
+  error: unknown,
+  context: ErrorContext
+): void {
   try {
     const result: unknown = container.reportError(error, context)
     if (result instanceof Promise) {

@@ -1,6 +1,9 @@
 import type { Container } from '~/container'
 import type { Tenant } from '~/ports/fixed-project'
 
+/** An age that is expired for longer than the purge's grace for a call to core. */
+export const LONG_EXPIRED_MS = 60_000
+
 /** What the retention tests plant: attempts and codes, expired or live. */
 export type Seeder = {
   /** Stores `n` attempts that expired `ageMs` ago (a negative age is still live). */

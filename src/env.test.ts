@@ -39,6 +39,7 @@ test.each([
   ['a zero body limit', { MAX_REQUEST_BODY_BYTES: '0' }],
   ['a body limit above 100 MB', { MAX_REQUEST_BODY_BYTES: '104857601' }],
   ['an empty connection pool', { DB_POOL_MAX: '0' }],
+  ['a pool too small for the purge and a request (3)', { DB_POOL_MAX: '3' }],
   ['a pool above 100 connections', { DB_POOL_MAX: '101' }],
   ['a purge interval of zero', { RETENTION_INTERVAL_MS: '0' }],
   ['a purge batch above 5000', { RETENTION_BATCH_SIZE: '5001' }],

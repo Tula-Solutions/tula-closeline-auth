@@ -5,6 +5,8 @@ import { MemoryRateLimiter } from '~/adapters/memory/rate-limiter'
 import { createApp } from '~/app'
 import { AUTH_ERRORS } from '~/errors'
 import { type ConcurrencyLimiter, Saturated } from '~/lib/concurrency'
+import * as Bootstrap from '~/modules/bootstrap/service'
+import * as Retention from '~/modules/retention/service'
 import { createReadyDeps } from '~/testing'
 import { at, call, emailedCode, text, wrongCode } from '~/testing/client'
 
@@ -888,6 +890,93 @@ describe('failures around the commit of a sign-up', () => {
     expect(reported).toContain('reconcile')
     expect(reported).not.toContain(email)
     expect(deps.logLines.join('\n')).not.toContain(email)
+  })
+})
+
+describe('an Organization that core made and nobody owns', () => {
+  /** Makes the account write fail, as a database that errors for a reason other than a taken address. */
+  function breakInsert(deps: Awaited<ReturnType<typeof setup>>['deps']) {
+    deps.users.create = async () => {
+      throw new Error('connection reset')
+    }
+  }
+  const reconcileReports = (deps: Awaited<ReturnType<typeof setup>>['deps']) =>
+    deps.reported.filter(
+      (entry) => entry.error instanceof Error && entry.error.message.includes('reconcile')
+    )
+
+  test('an insert that fails after core answered reports the Organization, user and attempt ids and no address', async () => {
+    const { deps, signUp, verify, nextEmail } = await setup()
+    const email = nextEmail()
+    const started = await signUp(email)
+    const code = emailedCode(deps, email)
+    breakInsert(deps)
+
+    const failed = await verify(started, code)
+
+    expect(failed.status).toBe(500)
+    const [report] = reconcileReports(deps)
+    const message = report?.error instanceof Error ? report.error.message : ''
+    expect(reconcileReports(deps)).toHaveLength(1)
+    expect(message).toContain(deps.membership.organizations[0]?.organizationId ?? 'missing')
+    expect(message).toContain(text(started.body, 'id'))
+    expect(message).toMatch(/usr_/)
+    expect(message).not.toContain(email)
+    expect(deps.logLines.join('\n')).not.toContain(email)
+  })
+
+  test('retrying one attempt whose insert keeps failing reports its orphan once, not on every retry', async () => {
+    const { deps, signUp, verify, nextEmail } = await setup()
+    const email = nextEmail()
+    const started = await signUp(email)
+    const code = emailedCode(deps, email)
+    breakInsert(deps)
+
+    for (let n = 0; n < 4; n++) {
+      expect((await verify(started, code)).status).toBe(500)
+    }
+
+    expect(reconcileReports(deps)).toHaveLength(1)
+    expect(deps.membership.organizations).toHaveLength(1)
+  })
+
+  test('another attempt is reported on its own, once', async () => {
+    const { deps, signUp, verify, nextEmail } = await setup()
+    const email = nextEmail()
+    const first = await signUp(email)
+    const firstCode = emailedCode(deps, email)
+    deps.clock.advance('2m')
+    const second = await signUp(email)
+    const secondCode = emailedCode(deps, email)
+    breakInsert(deps)
+
+    await verify(first, firstCode)
+    await verify(first, firstCode)
+    await verify(second, secondCode)
+    await verify(second, secondCode)
+
+    expect(reconcileReports(deps)).toHaveLength(2)
+  })
+
+  test('an attempt that expires while core is answering is not purged out from under the sign-up', async () => {
+    const { deps, signUp, verify, nextEmail } = await setup()
+    const email = nextEmail()
+    const started = await signUp(email)
+    const code = emailedCode(deps, email)
+    const createOrganization = deps.membership.createOrganization.bind(deps.membership)
+    deps.membership.createOrganization = async (input) => {
+      const created = await createOrganization(input)
+      // The attempt's ten minutes run out as core answers, and a purge runs right then.
+      deps.clock.advance('10m')
+      deps.clock.advance('1s')
+      await Retention.purgeExpired(deps, Bootstrap.requireTenant(deps))
+      return created
+    }
+
+    const done = await verify(started, code)
+
+    expect(done.status).toBe(200)
+    expect(deps.membership.organizations).toHaveLength(1)
   })
 })
 

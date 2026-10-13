@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import * as Bootstrap from '~/modules/bootstrap/service'
+import { MEMBERSHIP_TIMEOUT_MS } from '~/modules/membership/service'
 import { createReadyDeps } from '~/testing'
-import { seeder } from './seed'
+import { LONG_EXPIRED_MS, seeder } from './seed'
 import * as Retention from './service'
 
 async function setup(env: Record<string, string> = {}) {
@@ -38,8 +39,8 @@ async function waitFor(condition: () => boolean, ms = 5_000): Promise<void> {
 describe('purging expired sign-in data', () => {
   test('removes every expired attempt and code in batches no larger than the limit, and keeps live ones', async () => {
     const { deps, tenant, seed } = await setup()
-    await seed.attempts(12, 1_000)
-    await seed.tokens(7, 1_000)
+    await seed.attempts(12, LONG_EXPIRED_MS)
+    await seed.tokens(7, LONG_EXPIRED_MS)
     const [live] = await seed.attempts(1, -60_000)
     await seed.tokens(1, -60_000)
     const attempts = recording(deps.flowAttempts)
@@ -61,7 +62,7 @@ describe('purging expired sign-in data', () => {
 
   test('an exact multiple of the limit takes one more, empty, statement to be sure', async () => {
     const { deps, tenant, seed } = await setup()
-    await seed.attempts(10, 1_000)
+    await seed.attempts(10, LONG_EXPIRED_MS)
     const attempts = recording(deps.flowAttempts)
 
     await Retention.purgeExpired({ ...deps, flowAttempts: attempts.wrapped }, tenant)
@@ -71,7 +72,7 @@ describe('purging expired sign-in data', () => {
 
   test('stops between batches once told to', async () => {
     const { deps, tenant, seed } = await setup()
-    await seed.attempts(12, 1_000)
+    await seed.attempts(12, LONG_EXPIRED_MS)
     const controller = new AbortController()
     const attempts = recording(deps.flowAttempts)
     const stopping = {
@@ -93,10 +94,29 @@ describe('purging expired sign-in data', () => {
   })
 })
 
+describe('what a purge leaves for a sign-up still finishing', () => {
+  test('keeps an attempt that expired within the time core is given to answer, and purges one expired longer ago', async () => {
+    const { deps, tenant, seed } = await setup()
+    const [justExpired] = await seed.attempts(1, 1_000)
+    await seed.tokens(1, 1_000)
+    const [longExpired] = await seed.attempts(1, LONG_EXPIRED_MS)
+
+    const result = await Retention.purgeExpired(deps, tenant)
+
+    expect(result.attempts).toBe(1)
+    expect(await deps.flowAttempts.findById(tenant.environmentId, justExpired ?? '')).not.toBeNull()
+    expect(await deps.flowAttempts.findById(tenant.environmentId, longExpired ?? '')).toBeNull()
+  })
+
+  test('the grace is the time core is given to answer', () => {
+    expect(Retention.PURGE_GRACE_MS).toBe(MEMBERSHIP_TIMEOUT_MS)
+  })
+})
+
 describe('a run', () => {
   test('purges under the shared lock', async () => {
     const { deps, tenant, seed } = await setup()
-    await seed.attempts(3, 1_000)
+    await seed.attempts(3, LONG_EXPIRED_MS)
 
     expect(await Retention.runOnce(deps, tenant)).toBe('purged')
 
@@ -105,7 +125,7 @@ describe('a run', () => {
 
   test('is skipped, touching nothing, while another instance holds the lock', async () => {
     const { deps, tenant, seed } = await setup()
-    await seed.attempts(3, 1_000)
+    await seed.attempts(3, LONG_EXPIRED_MS)
     let outcome: Retention.RunOutcome | undefined
 
     await deps.exclusive.runExclusive(Retention.RETENTION_LOCK, async () => {
@@ -127,6 +147,8 @@ describe('a run', () => {
 
     expect(outcome).toBe('timed_out')
     expect(deps.logLines.some((line) => line.includes('retention run timed out'))).toBe(true)
+    expect(deps.reported).toHaveLength(1)
+    expect(deps.reported[0]?.context).toMatchObject({ method: 'RETENTION', status: 500 })
   })
 
   test('a failure is logged without row data and reported as failed, not thrown', async () => {
@@ -143,12 +165,47 @@ describe('a run', () => {
     expect(outcome).toBe('failed')
     expect(deps.logLines.some((line) => line.includes('retention run failed'))).toBe(true)
   })
+
+  test('a failure is also reported to the error tracker, with no row content', async () => {
+    const { deps, tenant, seed } = await setup()
+    await seed.attempts(3, LONG_EXPIRED_MS)
+    const broken = {
+      ...deps.flowAttempts,
+      deleteExpired: async () => {
+        throw new Error('connection reset')
+      },
+    } as typeof deps.flowAttempts
+
+    await Retention.runOnce({ ...deps, flowAttempts: broken }, tenant)
+
+    expect(deps.reported).toHaveLength(1)
+    expect(deps.reported[0]?.context).toMatchObject({ method: 'RETENTION', status: 500 })
+    const sent = JSON.stringify(
+      deps.reported[0]?.error,
+      Object.getOwnPropertyNames(deps.reported[0]?.error)
+    )
+    expect(sent).toContain('retention run failed')
+    expect(sent).not.toContain('seed0@northline.app')
+    expect(sent).not.toContain('argon2id')
+  })
+
+  test('a run that purges, or finds another instance holding the lock, reports nothing', async () => {
+    const { deps, tenant, seed } = await setup()
+    await seed.attempts(3, LONG_EXPIRED_MS)
+
+    await Retention.runOnce(deps, tenant)
+    await deps.exclusive.runExclusive(Retention.RETENTION_LOCK, async () => {
+      await Retention.runOnce(deps, tenant)
+    })
+
+    expect(deps.reported).toHaveLength(0)
+  })
 })
 
 describe('the schedule', () => {
   test('purges at boot and again on every interval, until stopped', async () => {
     const { deps, tenant, seed } = await setup({ RETENTION_INTERVAL_MS: '100' })
-    await seed.attempts(3, 1_000)
+    await seed.attempts(3, LONG_EXPIRED_MS)
     const attempts = recording(deps.flowAttempts)
 
     const retention = Retention.start({ ...deps, flowAttempts: attempts.wrapped }, tenant)
@@ -185,7 +242,7 @@ describe('the schedule', () => {
 
   test('stopping while a run is in progress waits for it and ends it', async () => {
     const { deps, tenant, seed } = await setup({ RETENTION_INTERVAL_MS: '100' })
-    await seed.attempts(100, 1_000)
+    await seed.attempts(100, LONG_EXPIRED_MS)
     const batches = { started: 0 }
     const slow = {
       ...deps.flowAttempts,

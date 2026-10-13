@@ -3,7 +3,7 @@ import { sql } from 'drizzle-orm'
 import { withEnvironment } from 'tula-closeline-db'
 import * as Bootstrap from '~/modules/bootstrap/service'
 import { createPostgresDeps } from '~/testing/postgres-deps'
-import { seeder } from './seed'
+import { LONG_EXPIRED_MS, seeder } from './seed'
 import * as Retention from './service'
 
 let deps: Awaited<ReturnType<typeof createPostgresDeps>>
@@ -55,8 +55,8 @@ describe('retention against a real Postgres', () => {
   test('removes expired attempts and codes, at most the limit per statement, and keeps live rows', async () => {
     const tenant = Bootstrap.requireTenant(deps)
     const seed = seeder(deps, tenant)
-    await seed.attempts(12, 1_000)
-    await seed.tokens(7, 1_000)
+    await seed.attempts(12, LONG_EXPIRED_MS)
+    await seed.tokens(7, LONG_EXPIRED_MS)
     await seed.tokens(2, -60_000)
     const { deps: bounded, removed } = limited(5)
 
@@ -70,7 +70,7 @@ describe('retention against a real Postgres', () => {
 
   test('a purged attempt takes its pending password hash with it', async () => {
     const tenant = Bootstrap.requireTenant(deps)
-    await seeder(deps, tenant).attempts(3, 1_000)
+    await seeder(deps, tenant).attempts(3, LONG_EXPIRED_MS)
 
     await Retention.runOnce(deps, tenant)
 
@@ -79,7 +79,7 @@ describe('retention against a real Postgres', () => {
 
   test('two instances running together: one purges, the other skips', async () => {
     const tenant = Bootstrap.requireTenant(deps)
-    await seeder(deps, tenant).attempts(4, 1_000)
+    await seeder(deps, tenant).attempts(4, LONG_EXPIRED_MS)
     let inner: Retention.RunOutcome | undefined
 
     const held = await deps.exclusive.runExclusive(Retention.RETENTION_LOCK, async () => {
@@ -105,7 +105,7 @@ describe('retention against a real Postgres', () => {
 
   test('twelve runs at once purge every row exactly once between them', async () => {
     const tenant = Bootstrap.requireTenant(deps)
-    await seeder(deps, tenant).attempts(30, 1_000)
+    await seeder(deps, tenant).attempts(30, LONG_EXPIRED_MS)
 
     const outcomes = await Promise.all(
       Array.from({ length: 12 }, () => Retention.runOnce(deps, tenant))

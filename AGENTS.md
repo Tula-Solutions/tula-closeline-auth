@@ -92,11 +92,13 @@ exists, and signing in recovers it.
 
 **Orphaned Organizations need reconciliation (owned by step 1.9, the core adapter).** Core can
 create an Organization for a sign-up whose account is never written: the insert loses the address
-to another sign-up (answered 409 `flow.invalid_step`, and reported through `reportError` with the
-Organization, user and attempt ids and no address), the process dies between core and the insert,
-or the attempt expires before a retry (a new attempt has a new key, so a second Organization). A
-burned invitation is the same. Auth does not clean these up; core or a reconciliation job must
-find Organizations whose owner never signed in.
+to another sign-up (409 `flow.invalid_step`), the insert fails for another reason (500), the
+process dies between core and the insert, or the attempt expires before a retry (a new attempt has
+a new key, so a second Organization). The first two are reported through `reportError` with the
+Organization, user and attempt ids and no address, once per attempt per hour (always logged).
+A burned invitation is the same. A timed-out call to core is not reported with an Organization
+id (none is known); a retry with the same key converges. Auth does not clean these up; core or a
+reconciliation job must find Organizations whose owner never signed in.
 
 Sign-in and refresh read the Organization (`forUser`) before any session or token exists. An
 account with none gets `auth.no_organization` (403), is reported through `reportError`, and gets
@@ -111,7 +113,10 @@ by cascade, their codes) and then codes whose `expiresAt` has passed, `RETENTION
 per statement, repeating while a batch comes back full. It runs at boot (not awaited) and every
 `RETENTION_INTERVAL_MS`, each run under a Postgres advisory lock (`ExclusiveRunner`, so only one
 instance purges at a time and the others skip) and bounded by `RETENTION_RUN_TIMEOUT_MS`. A failed
-or timed-out run is logged (no row data) and the next interval tries again. Shutdown stops it
+or timed-out run is logged and reported to the error tracker (no row data) and the next interval
+tries again. Only rows expired for more than 5 s (the bound on a call to core) are purged, so a
+sign-up that is waiting on core is never purged before it spends its code. It needs 2 connections
+at once, so `DB_POOL_MAX` is at least 4. Shutdown stops it
 before the pool closes. Sessions, refresh tokens and signing keys are not purged by this service
 yet.
 
@@ -120,7 +125,7 @@ yet.
 `ENVIRONMENT` (required), `REGION` (required: `us` or `eu`), `PORT`, `LOG_LEVEL`,
 `READINESS_TIMEOUT_MS`, `SHUTDOWN_TIMEOUT_MS`, `SHUTDOWN_GRACE_MS`, `MAX_REQUEST_BODY_BYTES`,
 `DATABASE_URL`, `AUTH_MASTER_KEY` (64 hex, never logged) and `PUBLIC_URL` (all three required
-outside `local`), `TOKEN_AUDIENCE` (default `closeline`), `DB_POOL_MAX` (default 10),
+outside `local`), `TOKEN_AUDIENCE` (default `closeline`), `DB_POOL_MAX` (default 10, at least 4),
 `RETENTION_INTERVAL_MS`, `RETENTION_BATCH_SIZE`, `RETENTION_RUN_TIMEOUT_MS`, `HASH_CONCURRENCY`,
 `HASH_QUEUE`, `SIGN_IN_CONCURRENCY`, `SIGN_IN_QUEUE`, `BREACH_CHECK_CONCURRENCY`,
 `BREACH_CHECK_QUEUE`. Add a key in both files.
@@ -156,25 +161,23 @@ scenarios against real Postgres as the `closeline_auth` role (`POSTGRES_PORT` mo
   follow-up ticket decides the redesign (e.g. key on address plus a device cookie, or exempt a
   known-good device).
 - No mail provider: the runtime mailer fails with `mail.unavailable`. Tests use the memory mailer.
-- **Deployment prerequisite: a per-source rate limit at the edge.** This service has no per-IP
+- **Deployment prerequisite: a per-source rate limit at the edge.** The service has no per-IP
   limit on sign-up and sign-in starts (it needs a trusted-proxy decision), so it must not be
-  exposed to the internet until the edge (load balancer or WAF) limits requests per source.
-  Without one a single source can fill the limiters below and shed everyone else's requests.
-  What bounds the cost of a flood inside the service: a sign-up checks the password policy
-  (local), then takes a hash slot, and inside it counts the send against the per-address cooldown
-  and hourly cap, and only then makes the breach lookup and the argon2id hash, so an address over
-  its cap costs neither (a password the breach list refuses does spend one send). Sign-up hashing
-  (`HASH_CONCURRENCY`, `HASH_QUEUE`), sign-in verification (`SIGN_IN_CONCURRENCY`,
-  `SIGN_IN_QUEUE`, a lane of its own so sign-up traffic cannot shed a sign-in) and the breach
-  lookup (`BREACH_CHECK_CONCURRENCY`, `BREACH_CHECK_QUEUE`) each run in a concurrency limiter; when
-  one is full and its queue too, the request is a 503 `server.unavailable` with `Retry-After` and
-  is not reported to the error tracker. **A request that is shed is never counted against anyone:**
-  sign-in counts the failed try, looks the user up and verifies inside the sign-in slot, and
-  sign-up counts the send inside the hash slot (and the breach slot), so a flood cannot lock real
-  accounts or burn their send allowance. A password longer than any account can have (1,024
-  characters) is refused as a wrong password (401 `auth.invalid_credentials`) before anything is
-  counted. A sign-in start is unthrottled per address (5 free password tries per identifier, and
-  the dummy hash for an unknown one, are bounded only by the sign-in limiter).
+  exposed to the internet until the edge (load balancer or WAF) limits requests per source;
+  without one a single source can fill the limiters below and shed everyone else. Inside the
+  service: a sign-up checks the password policy (local), takes a hash slot, and inside it counts
+  the send against the per-address cooldown and hourly cap, and only then does the breach lookup
+  and the argon2id hash, so an address over its cap costs neither (a password the breach list
+  refuses does spend one send). Sign-up hashing (`HASH_CONCURRENCY`, `HASH_QUEUE`), sign-in
+  verification (`SIGN_IN_CONCURRENCY`, `SIGN_IN_QUEUE`, a lane of its own) and the breach lookup
+  (`BREACH_CHECK_CONCURRENCY`, `BREACH_CHECK_QUEUE`) each run in a concurrency limiter; when one
+  and its queue are full the request is a 503 `server.unavailable` with `Retry-After`, not
+  reported to the tracker. **A request that is shed is never counted against anyone:** sign-in
+  counts the failed try, looks the user up and verifies inside the sign-in slot, and sign-up
+  counts the send inside the hash slot, so a flood cannot lock accounts or burn send allowances.
+  A password over 1,024 characters is refused as a wrong password (401
+  `auth.invalid_credentials`) before anything is counted. A sign-in start is unthrottled per
+  address (5 free tries per identifier, and the dummy hash, are bounded by the sign-in limiter).
 - Key rotation has a service function (`Jwks.rotate`) but no route or schedule.
 
 ## Hot paths

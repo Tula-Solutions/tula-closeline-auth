@@ -1,4 +1,5 @@
 import { ERRORS, formatId, type UserId } from 'tula-closeline-contract'
+import { isAppError } from 'tula-closeline-kit'
 import { z } from 'zod'
 import type { Container } from '~/container'
 import { describeError } from '~/describe-error'
@@ -268,6 +269,43 @@ async function bestEffort(
   }
 }
 
+/** The longest the tracker is told about one attempt's unowned Organization: once an hour. */
+const ORPHAN_REPORT_WINDOW_MS = durationToMs('1h')
+
+/**
+ * Tells the deployment that core made an Organization for a sign-up whose account was not written
+ * (ids only, never an address), so it can be reconciled (ticket 1.9). Logged every time, reported
+ * to the tracker once per attempt per hour, so that retries of one attempt, or attempts made on
+ * purpose, cannot flood it. It never throws.
+ */
+async function reportOrphan(
+  deps: Pick<Container, 'logger' | 'rateLimiter'>,
+  context: ClientContext,
+  status: number,
+  orphan: { organizationId: string; userId: string; attemptId: string; why: string }
+): Promise<void> {
+  const { organizationId, userId, attemptId, why } = orphan
+  try {
+    deps.logger.warn('an Organization has no owner', { organizationId, userId, attemptId, why })
+    const first = await deps.rateLimiter.hit(
+      `orphan_report:${attemptId}`,
+      1,
+      ORPHAN_REPORT_WINDOW_MS
+    )
+    if (first.allowed) {
+      context.report(
+        new Error(
+          `organization ${organizationId} has no owner: user ${userId} was not written ` +
+            `(${why}; attempt ${attemptId}); reconcile`
+        ),
+        status
+      )
+    }
+  } catch {
+    // Reporting must never change what the caller is told.
+  }
+}
+
 /**
  * Completes a sign-up with the emailed code: creates the account and its Organization membership,
  * then the first session.
@@ -278,8 +316,9 @@ async function bestEffort(
  * when the attempt started, so a retry gets the same Organization instead of a second; then the
  * account is written in one short transaction. An insert that finds this same user id already
  * there is a retry that crashed after committing, and counts as done. An insert that loses the
- * address to a different sign-up leaves an Organization with no owner: the answer is the same as
- * for a taken address and the orphan is reported (ids only) for reconciliation (ticket 1.9).
+ * address to a different sign-up, or fails for another reason, leaves an Organization with no
+ * owner: the first is answered like a taken address, and either is reported (ids only, once per
+ * attempt per hour) for reconciliation (ticket 1.9).
  *
  * The code is checked first but spent only after the account exists, and spending it and closing
  * the attempt are best-effort: once the account is committed a failure of either (a thrown
@@ -322,32 +361,42 @@ export async function verifyEmail(
   }
   const userUuid = formatId('usr', userId) as UserId
   const membership = await Membership.join(deps, userUuid, join, `signup:${attempt.id}`)
-  const created = await deps.users.create({
-    id: userId,
-    projectId: tenant.projectId,
-    environmentId: tenant.environmentId,
-    email: state.email ?? attempt.identifier,
-    emailNormalized: attempt.identifier,
-    emailVerifiedAt: now,
-    firstName: state.firstName ?? null,
-    lastName: state.lastName ?? null,
-    createdAt: now,
-    identityId: deps.ids.next(),
-    credentialId: deps.ids.next(),
-    passwordHash: state.passwordHash,
-  })
-  if (!created) {
-    const mine = await deps.users.findById(tenant.environmentId, userId)
-    if (mine?.emailNormalized !== attempt.identifier) {
-      context.report(
-        new Error(
-          `organization ${membership.organizationId} has no owner: user ${userUuid} lost the ` +
-            `address to another sign-up (attempt ${attempt.id}); reconcile`
-        ),
-        409
-      )
-      throw fail(AUTH_ERRORS['flow.invalid_step'])
+  // From here core has made an Organization: if the account is not written, nobody owns it.
+  const orphan = (why: string, status: number) =>
+    reportOrphan(deps, context, status, {
+      organizationId: membership.organizationId,
+      userId: userUuid,
+      attemptId: attempt.id,
+      why,
+    })
+  let created: boolean
+  try {
+    created = await deps.users.create({
+      id: userId,
+      projectId: tenant.projectId,
+      environmentId: tenant.environmentId,
+      email: state.email ?? attempt.identifier,
+      emailNormalized: attempt.identifier,
+      emailVerifiedAt: now,
+      firstName: state.firstName ?? null,
+      lastName: state.lastName ?? null,
+      createdAt: now,
+      identityId: deps.ids.next(),
+      credentialId: deps.ids.next(),
+      passwordHash: state.passwordHash,
+    })
+    if (!created) {
+      const mine = await deps.users.findById(tenant.environmentId, userId)
+      if (mine?.emailNormalized !== attempt.identifier) {
+        await orphan('the address went to another sign-up', 409)
+        throw fail(AUTH_ERRORS['flow.invalid_step'])
+      }
     }
+  } catch (error) {
+    if (!isAppError(error)) {
+      await orphan('the account could not be written', 500)
+    }
+    throw error
   }
   let spent: boolean | undefined
   await bestEffort(deps, 'spending the code', attempt.id, async () => {
