@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test'
+import { decodeJwt } from 'jose'
 import type { OrganizationId, UserId } from 'tula-closeline-contract'
 import { createStaticKeySet, createTokenVerifier } from 'tula-closeline-kit'
 import { createApp } from '~/app'
 import { publicUrl } from '~/env'
+import { sha256Hex } from '~/lib/crypto'
 import * as Bootstrap from '~/modules/bootstrap/service'
 import { jwksSchema } from '~/modules/jwks/schema'
 import * as Jwks from '~/modules/jwks/service'
@@ -194,6 +196,79 @@ describe('refreshing', () => {
 
     expect(down.status).toBe(503)
     expect(up.status).toBe(200)
+  })
+
+  test('a lost rotation race asks core once for the request, and the loser gets the same next token', async () => {
+    const { deps, refresh, refreshToken } = await setup()
+    const lookups = deps.membership.calls.lookup
+    const real = deps.membership.forUser
+    let asking = 0
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    // Both requests have read the token and are waiting on core before either rotates it.
+    deps.membership.forUser = async (userId, signal) => {
+      asking += 1
+      if (asking === 2) {
+        release()
+      }
+      await gate
+      return real(userId, signal)
+    }
+
+    const [one, two] = await Promise.all([refresh(refreshToken), refresh(refreshToken)])
+
+    expect([one.status, two.status]).toEqual([200, 200])
+    expect(text(one.body, 'refreshToken')).toBe(text(two.body, 'refreshToken'))
+    expect(deps.membership.calls.lookup - lookups).toBe(2)
+  })
+
+  test('a token spent beyond the grace period is reuse at once: no call to core, and an outage does not defer it', async () => {
+    const { deps, refresh, refreshToken, sessionId } = await setup()
+    await refresh(refreshToken)
+    deps.clock.advance(`${Math.ceil(REUSE_GRACE_MS / 1000) + 1}s`)
+    deps.membership.breakDown(true)
+    const lookups = deps.membership.calls.lookup
+
+    const replay = await refresh(refreshToken)
+
+    expect(replay.status).toBe(401)
+    expect(replay.body).toMatchObject({ error: { code: 'session.reuse_detected' } })
+    expect(deps.membership.calls.lookup).toBe(lookups)
+    const environmentId = deps.tenant.current?.environmentId ?? ''
+    expect((await deps.sessions.findById(environmentId, sessionId))?.revokeReason).toBe(
+      'reuse_detected'
+    )
+  })
+
+  test('an ended or expired session costs no call to core', async () => {
+    const { deps, refresh, refreshToken } = await setup()
+    deps.clock.advance('8d')
+    const lookups = deps.membership.calls.lookup
+
+    const reply = await refresh(refreshToken)
+
+    expect(reply.body).toMatchObject({ error: { code: 'session.expired' } })
+    expect(deps.membership.calls.lookup).toBe(lookups)
+  })
+
+  test('the clock is read again after core answers: the token and the rotation carry that time', async () => {
+    const { deps, refresh, refreshToken } = await setup()
+    const real = deps.membership.forUser
+    deps.membership.forUser = async (userId, signal) => {
+      deps.clock.advance('4s')
+      return real(userId, signal)
+    }
+
+    const reply = await refresh(refreshToken)
+
+    const after = deps.clock.now()
+    expect(reply.status).toBe(200)
+    expect(decodeJwt(text(reply.body, 'accessToken')).iat).toBe(Math.floor(after.getTime() / 1000))
+    const environmentId = deps.tenant.current?.environmentId ?? ''
+    const spent = await deps.sessions.findToken(environmentId, sha256Hex(refreshToken))
+    expect(spent?.token.usedAt?.getTime()).toBe(after.getTime())
   })
 
   test('a role change reaches the next token', async () => {

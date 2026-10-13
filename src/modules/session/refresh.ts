@@ -30,7 +30,9 @@ function plausible(token: string): boolean {
  * next token (the first response may have been lost); presented again later, or when it is not
  * the newest, it is reuse: the whole session is ended, because a stolen token and its rightful
  * owner cannot be told apart. The user's Organization is read again on every refresh, so a role
- * change reaches the next token.
+ * change reaches the next token. What needs no answer from core (an ended session, a spent token
+ * past its grace, an expired token) is decided before core is asked, and core is asked once per
+ * request; the clock is read again after the answer for the times the new tokens carry.
  *
  * @param onNoOrganization - Told the user id when the account has no Organization (reported).
  * @throws AppError `session.invalid_token`, `session.revoked`, `session.reuse_detected`,
@@ -47,30 +49,62 @@ export async function refresh(
     throw fail(AUTH_ERRORS['session.invalid_token'])
   }
   const tokenHash = sha256Hex(refreshToken)
+  // Core is asked at most once per request: a retry of the rotation after a lost race reuses the
+  // answer, so one request is never more than one call (and never two bounds) behind core.
+  let asked: { membership: Awaited<ReturnType<typeof Membership.of>> } | undefined
   for (let pass = 0; pass < 2; pass++) {
-    const now = deps.clock.now()
+    const checkedAt = deps.clock.now()
     const found = await deps.sessions.findToken(tenant.environmentId, tokenHash)
     if (!found) {
       throw fail(AUTH_ERRORS['session.invalid_token'])
     }
     const { token, session } = found
-    rejectEnded(session, now)
+    rejectEnded(session, checkedAt)
     const user = await deps.users.findById(tenant.environmentId, session.userId)
     if (!user || user.bannedAt !== null) {
-      await deps.sessions.revoke(tenant.environmentId, session.id, 'user_banned', now)
+      await deps.sessions.revoke(tenant.environmentId, session.id, 'user_banned', checkedAt)
       throw fail(AUTH_ERRORS['auth.user_banned'])
     }
-    let membership: Awaited<ReturnType<typeof Membership.of>>
-    try {
-      membership = await Membership.of(deps, formatId('usr', session.userId) as UserId)
-    } catch (error) {
-      if (Membership.isOrganizationDeleted(error)) {
-        // Their Organization is gone: this session can never get a token again.
-        await deps.sessions.revoke(tenant.environmentId, session.id, 'revoked_by_admin', now)
+
+    // Everything that needs no answer from core is decided first, so a replayed or expired token
+    // costs no call, and an outage can never defer reuse detection.
+    let replay = false
+    if (token.usedAt !== null) {
+      const withinGrace = checkedAt.getTime() - token.usedAt.getTime() < REUSE_GRACE_MS
+      const child =
+        withinGrace && token.replacedById
+          ? await deps.sessions.findTokenById(tenant.environmentId, token.replacedById)
+          : null
+      if (!child || child.usedAt !== null) {
+        await deps.sessions.revoke(tenant.environmentId, session.id, 'reuse_detected', checkedAt)
+        deps.logger.warn('refresh token reuse detected; session revoked', {
+          sessionId: session.id,
+        })
+        throw fail(AUTH_ERRORS['session.reuse_detected'])
       }
-      // Any other failure (core unavailable) changed nothing: the same token can be retried.
-      throw error
+      replay = true
+    } else if (token.expiresAt.getTime() <= checkedAt.getTime()) {
+      throw fail(AUTH_ERRORS['session.expired'])
     }
+
+    if (asked === undefined) {
+      try {
+        asked = { membership: await Membership.of(deps, formatId('usr', session.userId) as UserId) }
+      } catch (error) {
+        if (Membership.isOrganizationDeleted(error)) {
+          // Their Organization is gone: this session can never get a token again.
+          await deps.sessions.revoke(
+            tenant.environmentId,
+            session.id,
+            'revoked_by_admin',
+            deps.clock.now()
+          )
+        }
+        // Any other failure (core unavailable) changed nothing: the same token can be retried.
+        throw error
+      }
+    }
+    const { membership } = asked
     if (membership === null) {
       onNoOrganization(session.userId)
       throw fail(AUTH_ERRORS['auth.no_organization'])
@@ -82,28 +116,14 @@ export async function refresh(
       authenticatedAt: session.factorVerifiedAt,
       authMethods: session.authMethods,
     }
+    // Read again: core may have taken seconds, and the access token's issue time and the
+    // rotation time (which starts the grace window) are when they happen, not when we began.
+    const now = deps.clock.now()
 
-    if (token.usedAt !== null) {
-      const withinGrace = now.getTime() - token.usedAt.getTime() < REUSE_GRACE_MS
-      const child =
-        withinGrace && token.replacedById
-          ? await deps.sessions.findTokenById(tenant.environmentId, token.replacedById)
-          : null
-      if (child && child.usedAt === null) {
-        const access = await sign(tokenSession, membership, now)
-        return issued(
-          session.id,
-          access,
-          await deriveToken(deps, { parentId: token.id }),
-          membership
-        )
-      }
-      await deps.sessions.revoke(tenant.environmentId, session.id, 'reuse_detected', now)
-      deps.logger.warn('refresh token reuse detected; session revoked', { sessionId: session.id })
-      throw fail(AUTH_ERRORS['session.reuse_detected'])
-    }
-    if (token.expiresAt.getTime() <= now.getTime()) {
-      throw fail(AUTH_ERRORS['session.expired'])
+    if (replay) {
+      // The first response may have been lost: the same next token is returned.
+      const access = await sign(tokenSession, membership, now)
+      return issued(session.id, access, await deriveToken(deps, { parentId: token.id }), membership)
     }
 
     const idleExpiresAt = idleExpiry(now, session.absoluteExpiresAt)
@@ -126,7 +146,8 @@ export async function refresh(
     if (rotated) {
       return issued(session.id, await sign(tokenSession, membership, now), child, membership)
     }
-    // Lost a race with another refresh of the same token: look again, it is now a replay.
+    // Lost a race with another refresh of the same token: look again, it is now a replay (the
+    // answer from core is kept).
   }
   throw new Error('refresh rotation lost the race twice')
 }
