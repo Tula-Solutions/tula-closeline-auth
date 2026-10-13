@@ -55,6 +55,14 @@ export class MemoryUserRepository implements UserRepository {
     return true
   }
 
+  /** Bans a user, as an administrator would (a test control; the service has no ban route). */
+  ban(userId: string, at: Date): void {
+    const stored = this.#byId.get(userId)
+    if (stored) {
+      stored.user.bannedAt = at
+    }
+  }
+
   /** @inheritdoc */
   async recordSignIn(environmentId: string, userId: string, at: Date): Promise<void> {
     const stored = this.#byId.get(userId)

@@ -5,6 +5,7 @@ import type { AppEnv } from '~/http/types'
 import { createFlowRouter } from '~/modules/flow/router'
 import { createHealthRouter } from '~/modules/health/router'
 import { createJwksRouter } from '~/modules/jwks/router'
+import { createSessionRouter } from '~/modules/session/router'
 import { createUserRouter } from '~/modules/user/router'
 import { serveOpenApi } from '~/openapi'
 
@@ -15,6 +16,7 @@ export function createApp(container: Container): OpenAPIHono<AppEnv> {
   app.route('/', createHealthRouter(container))
   app.route('/', createJwksRouter(container))
   app.route('/', createFlowRouter(container))
+  app.route('/', createSessionRouter(container))
   app.route('/', createUserRouter(container))
   serveOpenApi(app)
 

@@ -27,6 +27,8 @@ export type TestDeps = Container & {
   reported: { error: unknown; context: ErrorContext }[]
   /** The memory membership service, with the controls to arrange and break it. */
   membership: MemoryMembership
+  /** The user repository, with a control to ban a user. */
+  users: MemoryUserRepository
   /** The mailer that keeps what it was asked to send. */
   mailer: MemoryMailer
   /** The breach checker, with the passwords it should call breached. */
