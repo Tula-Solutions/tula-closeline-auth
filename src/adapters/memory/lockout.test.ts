@@ -44,4 +44,50 @@ describe('MemoryLockout', () => {
     await lockout.attempt('fresh', policy, clock.now())
     expect(lockout.size).toBe(1)
   })
+
+  test('under key churn the map never grows past its cap', async () => {
+    const clock = new FixedClock()
+    const lockout = new MemoryLockout(clock, { maxKeys: 50 })
+
+    for (let n = 0; n < 5_000; n++) {
+      await lockout.attempt(`churn${n}`, policy, clock.now())
+    }
+
+    expect(lockout.size).toBeLessThanOrEqual(50)
+  })
+
+  test('a locked key stays locked however many other keys come through', async () => {
+    const clock = new FixedClock()
+    const lockout = new MemoryLockout(clock, { maxKeys: 50 })
+    for (let n = 0; n < 4; n++) {
+      await lockout.attempt('target', policy, clock.now())
+    }
+    expect((await lockout.attempt('target', policy, clock.now())).allowed).toBe(false)
+
+    for (let n = 0; n < 5_000; n++) {
+      await lockout.attempt(`churn${n}`, policy, clock.now())
+    }
+
+    expect((await lockout.attempt('target', policy, clock.now())).allowed).toBe(false)
+  })
+
+  test('a lockout full of locked keys refuses a new key and unlocks none of them early', async () => {
+    const clock = new FixedClock()
+    const lockout = new MemoryLockout(clock, { maxKeys: 50 })
+    for (let n = 0; n < 50; n++) {
+      for (let i = 0; i < 4; i++) {
+        await lockout.attempt(`full${n}`, policy, clock.now())
+      }
+    }
+
+    const newcomer = await lockout.attempt('newcomer', policy, clock.now())
+    const again = await Promise.all(
+      Array.from({ length: 50 }, (_, n) => lockout.attempt(`full${n}`, policy, clock.now()))
+    )
+
+    expect(newcomer.allowed).toBe(false)
+    expect(newcomer.retryAfterMs).toBeGreaterThan(0)
+    expect(again.some((decision) => decision.allowed)).toBe(false)
+    expect(lockout.size).toBeLessThanOrEqual(50)
+  })
 })

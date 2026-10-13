@@ -104,10 +104,13 @@ scenarios against real Postgres as the `closeline_auth` role (`POSTGRES_PORT` mo
 
 ## Known gaps
 
-- Rate limiting and lockout are per-process memory (`MemoryRateLimiter`, `MemoryLockout`): no
-  table or cache exists for them, so with several instances the effective limits multiply. This
-  breaks "state lives in Postgres, the queue or the cache" and needs a shared store (schema or
-  infra decision).
+- **Deployment constraint: one instance until the counters move to Postgres.** Rate limits and
+  lockout are per-process memory (`MemoryRateLimiter`, `MemoryLockout`), so with N instances an
+  attacker gets N times the free guesses and sends, and every deploy or crash resets the counts.
+  This breaks "state lives in Postgres, the queue or the cache"; moving them needs a table in a
+  `tula-closeline-db` release (a separate ticket). Until then both maps are capped at 50,000 keys:
+  expired keys go first, then the oldest key that is not locked or at its limit; a locked key is
+  never evicted, and if every key is locked a new key is refused (fails closed).
 - No mail provider: the runtime mailer fails with `mail.unavailable`. Tests use the memory mailer.
 - No per-IP limit on sign-up and sign-in starts, and argon2id (64 MiB) runs before any limit on
   a sign-up: capacity planning needs a trusted-proxy decision.
