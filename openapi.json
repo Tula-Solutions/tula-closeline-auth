@@ -780,7 +780,7 @@
             }
           },
           "503": {
-            "description": "The Organization membership or mail service is unavailable.",
+            "description": "The Organization membership or mail service is unavailable; see `Retry-After`. The attempt and code still work.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1070,7 +1070,7 @@
             }
           },
           "503": {
-            "description": "The Organization membership or mail service is unavailable.",
+            "description": "The Organization membership or mail service is unavailable; see `Retry-After`. The attempt and code still work.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1349,7 +1349,7 @@
             }
           },
           "503": {
-            "description": "The Organization membership or mail service is unavailable.",
+            "description": "The Organization membership or mail service is unavailable; see `Retry-After`. The attempt and code still work.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1622,7 +1622,7 @@
             }
           },
           "503": {
-            "description": "The Organization membership or mail service is unavailable.",
+            "description": "The Organization membership or mail service is unavailable; see `Retry-After`. The attempt and code still work.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1661,7 +1661,7 @@
       "post": {
         "tags": ["sign-in"],
         "summary": "Submit the password",
-        "description": "Completes the sign-in with tokens. An account with no Organization is refused with `auth.no_organization` and gets no session.",
+        "description": "Completes the sign-in with tokens. An account with no Organization is refused with `auth.no_organization`, and one whose Organization was deleted with `organization.deleted`; neither gets a session. If the core service cannot answer, the answer is 503 `membership.unavailable` with `Retry-After`: nothing is counted against the account and the same attempt can be submitted again.",
         "parameters": [
           {
             "schema": {
@@ -1878,6 +1878,39 @@
               }
             }
           },
+          "410": {
+            "description": "The account’s Organization was deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": ["code", "message"]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
           "422": {
             "description": "The input is refused: address, password, code or invitation.",
             "content": {
@@ -1978,7 +2011,7 @@
             }
           },
           "503": {
-            "description": "The Organization membership or mail service is unavailable.",
+            "description": "The Organization membership or mail service is unavailable; see `Retry-After`. The attempt and code still work.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2068,7 +2101,7 @@
       "post": {
         "tags": ["sessions"],
         "summary": "Refresh a session",
-        "description": "Trades a refresh token for new tokens. Each refresh token works once; presenting a spent one after a short grace period ends the whole session (`session.reuse_detected`).",
+        "description": "Trades a refresh token for new tokens. Each refresh token works once; presenting a spent one after a short grace period ends the whole session (`session.reuse_detected`). If the core service cannot answer, the answer is 503 `membership.unavailable` with `Retry-After` and the refresh token is not spent: send the same one again. A user whose Organization was deleted gets `organization.deleted` and the session ends.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2156,6 +2189,39 @@
               }
             }
           },
+          "410": {
+            "description": "The user’s Organization was deleted; the session has ended.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": ["code", "message"]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
           "500": {
             "description": "Something went wrong on our side.",
             "content": {
@@ -2190,7 +2256,7 @@
             }
           },
           "503": {
-            "description": "The Organization membership service is unavailable.",
+            "description": "The Organization membership service is unavailable; see `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {

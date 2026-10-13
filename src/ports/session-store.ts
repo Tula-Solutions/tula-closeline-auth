@@ -1,5 +1,8 @@
-/** Why a session ended early. */
-export type RevokeReason = 'sign_out' | 'reuse_detected' | 'user_banned'
+/**
+ * Why a session ended early. `revoked_by_admin` is the system ending it because the user's
+ * Organization was deleted (found at refresh).
+ */
+export type RevokeReason = 'sign_out' | 'reuse_detected' | 'user_banned' | 'revoked_by_admin'
 
 /** Which kind of client holds a session. */
 export type SessionClient = 'web' | 'ios' | 'android' | 'server'

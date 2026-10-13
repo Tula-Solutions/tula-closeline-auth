@@ -155,3 +155,50 @@ describe('a call that is given up on', () => {
     expect(seen?.aborted).toBe(false)
   })
 })
+
+describe('what a token may be issued for', () => {
+  const setup = async () => {
+    const membership = createMemoryMembership()
+    const { organizationId } = await membership.createOrganization({
+      userId,
+      name: 'Northline',
+      idempotencyKey: 'signup:status-test-key',
+    })
+    return { membership, organizationId }
+  }
+
+  test('the answer carries the Organization and role and nothing else, whatever the status', async () => {
+    const { membership, organizationId } = await setup()
+
+    for (const status of ['active', 'suspended'] as const) {
+      membership.setOrganizationStatus(organizationId, status)
+      expect(await Membership.of({ membership }, userId)).toEqual({ organizationId, role: 'owner' })
+    }
+  })
+
+  test('a deleted Organization is refused, and the refusal can be told from an outage', async () => {
+    const { membership, organizationId } = await setup()
+    membership.setOrganizationStatus(organizationId, 'deleted')
+
+    const refused = await Membership.of({ membership }, userId).catch((e: unknown) => e)
+    membership.breakDown(true)
+    const outage = await Membership.of({ membership }, userId).catch((e: unknown) => e)
+
+    expect(refused).toMatchObject({ code: 'organization.deleted', status: 410 })
+    expect(Membership.isOrganizationDeleted(refused)).toBe(true)
+    expect(Membership.isOrganizationDeleted(outage)).toBe(false)
+    expect(Membership.isOrganizationDeleted(new Error('organization.deleted'))).toBe(false)
+  })
+
+  test('an outage tells the client when to try again', async () => {
+    const { membership } = await setup()
+    membership.breakDown(true)
+
+    await expect(Membership.of({ membership }, userId)).rejects.toMatchObject({
+      details: { retryAfter: Membership.MEMBERSHIP_RETRY_AFTER_SECONDS },
+    })
+    await expect(
+      Membership.join({ membership }, userId, { kind: 'create', name: 'A' }, 'signup:another-key-1')
+    ).rejects.toMatchObject({ details: { retryAfter: Membership.MEMBERSHIP_RETRY_AFTER_SECONDS } })
+  })
+})

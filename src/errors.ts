@@ -1,4 +1,10 @@
-import { defineErrors, ERRORS, type ErrorDefinition, SIGNUP_ERRORS } from 'tula-closeline-contract'
+import {
+  CORE_ERRORS,
+  defineErrors,
+  ERRORS,
+  type ErrorDefinition,
+  SIGNUP_ERRORS,
+} from 'tula-closeline-contract'
 import { AppError } from 'tula-closeline-kit'
 
 /** The service's own errors, as `area.reason` codes with their HTTP status and default message. */
@@ -32,6 +38,8 @@ export const AUTH_ERRORS = {
   // `auth.no_organization`, `signup.invitation_invalid`, `signup.organization_name_invalid` and
   // `membership.unavailable` come from the contract.
   ...SIGNUP_ERRORS,
+  // Core's own code, returned by sign-in and refresh when the user's Organization was deleted.
+  'organization.deleted': CORE_ERRORS['organization.deleted'],
   ...defineErrors('mail', {
     unavailable: { status: 503, message: 'The email could not be sent right now. Try again.' },
   }),

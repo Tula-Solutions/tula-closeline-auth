@@ -37,7 +37,9 @@ const errors = {
   409: errorResponse('The attempt is not on this step.'),
   422: errorResponse('The input is refused: address, password, code or invitation.'),
   429: errorResponse('Too many tries; see `details.retryAfter` (seconds).'),
-  503: errorResponse('The Organization membership or mail service is unavailable.'),
+  503: errorResponse(
+    'The Organization membership or mail service is unavailable; see `Retry-After`. The attempt and code still work.'
+  ),
   500: errorResponse('Something went wrong on our side.'),
 }
 
@@ -105,12 +107,16 @@ const password = createRoute({
   summary: 'Submit the password',
   description:
     'Completes the sign-in with tokens. An account with no Organization is refused with ' +
-    '`auth.no_organization` and gets no session.',
+    '`auth.no_organization`, and one whose Organization was deleted with `organization.deleted`; ' +
+    'neither gets a session. If the core service cannot answer, the answer is 503 ' +
+    '`membership.unavailable` with `Retry-After`: nothing is counted against the account and ' +
+    'the same attempt can be submitted again.',
   request: { params: idParams, headers: attemptHeaders, body: json(passwordRequestSchema) },
   responses: {
     ...ok,
     401: errorResponse('The address or password is not right (the same answer for both).'),
     403: errorResponse('The account is banned or has no Organization.'),
+    410: errorResponse('The account\u2019s Organization was deleted.'),
     ...errors,
   },
 })

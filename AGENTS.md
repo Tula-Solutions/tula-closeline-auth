@@ -53,10 +53,10 @@ The shape in `.claude/COMMON.md` is built; modules are under `src/modules/<name>
 - Modules: `bootstrap` (the Region's one workspace, project and two environments, created under an
   advisory lock), `jwks` (keys, rotation, `/.well-known/jwks.json`), `token` (signs `at+jwt`),
   `flow` (sign-up and sign-in), `verification` (emailed codes), `password`, `membership` (the
-  port to the core service, with a 5 s bound and an abort signal), `session` (create, refresh, sign-out, list,
-  authenticate), `user` (`/v1/client/me`), `retention` (the purge, below), `conformance` (the
+  port to the core service, with a 5 s bound and an abort signal), `session` (create, refresh,
+  sign-out, list, authenticate), `user` (`/v1/client/me`), `retention` (the purge, below), `conformance` (the
   scenario runner).
-- Readiness checks `database` and `bootstrap`; shutdown as in the template (`src/shutdown.ts`).
+- Readiness checks `database` and `bootstrap`; shutdown as in the template.
 - `openapi.json` is generated: `bun run openapi`; `verify` fails if it is stale.
 
 ## Routes
@@ -71,10 +71,13 @@ secret travels in `x-tula-attempt`; the client kind in `x-tula-client`.
 
 A user belongs to exactly one Organization. A sign-up carries exactly one of `organizationName`
 (the user becomes Owner) or `invitationToken`; the account and its membership are made together,
-so every token carries `org` and `role`. The membership port (`src/ports/membership.ts`) has
-three operations: create an Organization for a new user, accept an invitation for a new user,
-return the Organization and role of an existing user. The runtime adapter is a placeholder until
-ticket 1.9 (it never invents a membership), so nobody can sign up on a real deployment yet.
+so every token carries `org` and `role`. `src/adapters/http/membership.ts` implements the membership
+port over HTTP to core (`local` with no `CORE_*` setting runs a placeholder: nobody can sign up).
+Answer mapping: `.claude/rules/membership.md`. Sign-in and refresh read the Organization first:
+`active` and `suspended` get tokens, `deleted` `organization.deleted` (410; refresh also ends the
+session), none `auth.no_organization` (403, reported). Core slow or down: sign-in,
+refresh and sign-up answer 503 `membership.unavailable` (`Retry-After: 5`), issuing, counting,
+rotating and spending nothing: retry the same attempt, code or token.
 
 Sign-up safety: the user id and the idempotency key `signup:<attempt id>` are fixed when the
 attempt starts. `verify-email` holds no database transaction across the call to core (a slow core
@@ -89,20 +92,17 @@ After the commit, spending the code and closing the attempt are best-effort (log
 attempt id, never fatal); a failure creating the first session is an error but the account
 exists, and signing in recovers it.
 
-**Orphaned Organizations need reconciliation (owned by step 1.9, the core adapter).** Core can
-create an Organization for a sign-up whose account is never written: the insert loses the address
-to another sign-up (409 `flow.invalid_step`), the insert fails for another reason (500), the
-process dies between core and the insert, or the attempt expires before a retry (a new attempt has
-a new key, so a second Organization). The first two are reported through `reportError` with the
+**Orphaned Organizations still need reconciliation (open, a follow-up ticket).** Core can create
+an Organization for a sign-up whose account is never written: the insert loses the address to
+another sign-up (409 `flow.invalid_step`), the insert fails for another reason (500), the process
+dies between core and the insert, or the attempt expires before a retry (a new attempt has a new
+key, so a second Organization). The first two are reported through `reportError` with the
 Organization, user and attempt ids and no address, once per attempt per hour. An orphan is always
 logged with ids, even when the report is suppressed or the limiter map is full. A burned
-invitation is the same. A timed-out call to core is not reported with an Organization
-id (none is known); a retry with the same key converges. Auth does not clean these up; core or a
-reconciliation job must find Organizations whose owner never signed in.
-
-Sign-in and refresh read the Organization (`forUser`) before any session or token exists. An
-account with none gets `auth.no_organization` (403), is reported through `reportError`, and gets
-no session and no token.
+invitation is the same. A timed-out call is not reported with an Organization id (none is
+known); a retry with the same key converges. Auth does not clean these up; a reconciliation job
+must find Organizations whose owner never signed in, which needs a call in core that does not
+exist yet.
 
 ## Retention
 
@@ -123,8 +123,9 @@ by this service yet.
 
 `ENVIRONMENT` (required), `REGION` (required: `us` or `eu`), `PORT`, `LOG_LEVEL`,
 `READINESS_TIMEOUT_MS`, `SHUTDOWN_TIMEOUT_MS`, `SHUTDOWN_GRACE_MS`, `MAX_REQUEST_BODY_BYTES`,
-`DATABASE_URL`, `AUTH_MASTER_KEY` (64 hex, never logged) and `PUBLIC_URL` (all three required
-outside `local`), `TOKEN_AUDIENCE` (default `closeline`), `DB_POOL_MAX` (default 10, at least 4),
+`DATABASE_URL`, `AUTH_MASTER_KEY` (64 hex, never logged), `PUBLIC_URL`, `CORE_BASE_URL` (https)
+and `CORE_INTERNAL_TOKEN` (32+ characters, never logged) (all five required outside `local`; in
+`local` both core keys or neither), `TOKEN_AUDIENCE` (default `closeline`), `DB_POOL_MAX` (default 10, at least 4),
 `RETENTION_INTERVAL_MS`, `RETENTION_BATCH_SIZE`, `RETENTION_RUN_TIMEOUT_MS`, `HASH_CONCURRENCY`,
 `HASH_QUEUE`, `SIGN_IN_CONCURRENCY`, `SIGN_IN_QUEUE`, `BREACH_CHECK_CONCURRENCY`,
 `BREACH_CHECK_QUEUE`. Add a key in both files.
@@ -187,13 +188,13 @@ The per-request middleware stack (`createBaseApp`), `/healthz`, and session refr
 (`Sessions.refresh`: each signed-in device calls it every minute). Refresh is O(1) in users,
 sessions, Organizations and signing keys: one token lookup by hash, one user lookup by id, one
 active-key read (`SigningKeyStore.active`, one row however many keys were retired), one
-membership read to core, one signature, one rotation. The JWKS and bearer routes read at most 20
-keys, bounded in SQL by retirement time and a limit. Budgets are in `bench/`.
+membership read to core (the token hook, as at sign-in: one HTTP call, retried at most once, 4.15 s
+worst case), one signature, one rotation. The JWKS and bearer routes read at most 20 keys,
+bounded in SQL by retirement time and a limit. Budgets are in `bench/`.
 
 A benchmark times `measure(operation)`: a warm-up, then several batches, gated on the fastest, so a
-noisy runner cannot fail it but a real regression (every batch slower) does. Budget is about 5x the
-typical best batch, written in the file. `bun run bench` is part of `verify`. Add a benchmark and
-name the function here when a new hot path appears.
+noisy runner cannot fail it but a real regression does. Budget is about 5x the typical best batch,
+written in the file. `bun run bench` is part of `verify`. Name a new hot path's benchmark here.
 
 ## Issues
 

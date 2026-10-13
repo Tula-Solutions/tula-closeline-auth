@@ -34,7 +34,8 @@ function plausible(token: string): boolean {
  *
  * @param onNoOrganization - Told the user id when the account has no Organization (reported).
  * @throws AppError `session.invalid_token`, `session.revoked`, `session.reuse_detected`,
- *   `session.expired`, `auth.user_banned`, `auth.no_organization`, `membership.unavailable`.
+ *   `session.expired`, `auth.user_banned`, `auth.no_organization`, `organization.deleted` (the
+ *   session is ended), `membership.unavailable` (nothing rotated; retry the same token).
  */
 export async function refresh(
   deps: SessionDeps,
@@ -59,7 +60,17 @@ export async function refresh(
       await deps.sessions.revoke(tenant.environmentId, session.id, 'user_banned', now)
       throw fail(AUTH_ERRORS['auth.user_banned'])
     }
-    const membership = await Membership.of(deps, formatId('usr', session.userId) as UserId)
+    let membership: Awaited<ReturnType<typeof Membership.of>>
+    try {
+      membership = await Membership.of(deps, formatId('usr', session.userId) as UserId)
+    } catch (error) {
+      if (Membership.isOrganizationDeleted(error)) {
+        // Their Organization is gone: this session can never get a token again.
+        await deps.sessions.revoke(tenant.environmentId, session.id, 'revoked_by_admin', now)
+      }
+      // Any other failure (core unavailable) changed nothing: the same token can be retried.
+      throw error
+    }
     if (membership === null) {
       onNoOrganization(session.userId)
       throw fail(AUTH_ERRORS['auth.no_organization'])
