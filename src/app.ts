@@ -1,18 +1,24 @@
-import { Hono } from 'hono'
-import { PACKAGE as CONTRACT } from 'tula-closeline-contract'
-import { PACKAGE as DB } from 'tula-closeline-db'
-import { PACKAGE as KIT } from 'tula-closeline-kit'
+import type { OpenAPIHono } from '@hono/zod-openapi'
+import type { Container } from '~/container'
+import { createBaseApp } from '~/http/base'
+import type { AppEnv } from '~/http/types'
+import { createFlowRouter } from '~/modules/flow/router'
+import { createHealthRouter } from '~/modules/health/router'
+import { createJwksRouter } from '~/modules/jwks/router'
+import { createSessionRouter } from '~/modules/session/router'
+import { createUserRouter } from '~/modules/user/router'
+import { serveOpenApi } from '~/openapi'
 
-/** This service's name, as reported by its health endpoint. */
-export const SERVICE = 'tula-closeline-auth'
+/** Build the HTTP app from a container. Modules are mounted here as they are added. */
+export function createApp(container: Container): OpenAPIHono<AppEnv> {
+  const app = createBaseApp(container)
 
-/** Build the HTTP app. Modules are mounted here as they are added. */
-export function createApp(): Hono {
-  const app = new Hono()
-
-  app.get('/healthz', (c) =>
-    c.json({ status: 'ok', service: SERVICE, libraries: [CONTRACT, DB, KIT] })
-  )
+  app.route('/', createHealthRouter(container))
+  app.route('/', createJwksRouter(container))
+  app.route('/', createFlowRouter(container))
+  app.route('/', createSessionRouter(container))
+  app.route('/', createUserRouter(container))
+  serveOpenApi(app)
 
   return app
 }
