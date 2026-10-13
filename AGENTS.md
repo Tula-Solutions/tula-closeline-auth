@@ -74,6 +74,14 @@ The shape in `.claude/COMMON.md` is built; modules are under `src/modules/<name>
 `POST /v1/client/sessions/sign-out`, `GET /v1/client/sessions`, `GET /v1/client/me`. An attempt's
 secret travels in `x-tula-attempt`; the client kind in `x-tula-client`.
 
+## Browser sessions (refresh cookie, hub issue 41)
+
+`x-tula-client: browser` (stored as session client `web`) gets the refresh token in the cookie
+`__Secure-tula_refresh` (HttpOnly, Secure, SameSite=Strict, `Path=/v1/client/sessions/`), never in
+the body; refresh and sign-out read only the cookie, after an `Origin` allow-list check. Every
+other client type is unchanged. Rules: `.claude/rules/session.md`. The known-device cookie is not
+built here: it comes with the lockout change (hub issue 30), where its verification lives.
+
 ## Accounts and Organizations
 
 A user belongs to exactly one Organization. A sign-up carries exactly one of `organizationName`
@@ -122,7 +130,9 @@ and `CORE_INTERNAL_TOKEN` (32+ characters, never logged) (all five required outs
 `TOKEN_AUDIENCE` (default `closeline`), `DB_POOL_MAX` (default 10, at least 4),
 `RETENTION_INTERVAL_MS`, `RETENTION_BATCH_SIZE`, `RETENTION_RUN_TIMEOUT_MS`, `HASH_CONCURRENCY`,
 `HASH_QUEUE`, `SIGN_IN_CONCURRENCY`, `SIGN_IN_QUEUE`, `BREACH_CHECK_CONCURRENCY`,
-`BREACH_CHECK_QUEUE`, `MAIL_LOCAL_URL`, `MAIL_LOCAL_FROM` (local only). Add a key in both files.
+`BREACH_CHECK_QUEUE`, `MAIL_LOCAL_URL`, `MAIL_LOCAL_FROM` (local only), `SESSION_ALLOWED_ORIGINS` (exact origins,
+comma-separated, https outside `local`, no wildcard; unset refuses every browser refresh and sign-out),
+`SESSION_COOKIE_INSECURE` (`true` only in `local`: drops `Secure` and the prefix). Add a key in both files.
 
 ## Tests
 
@@ -189,6 +199,7 @@ too, only a token spent beyond grace and an expired token cost no call),
 one signature, one rotation. The membership lookup through the HTTP adapter is a hot path too
 (`bench/membership.bench.test.ts`: best batch about 53 ms per 500 lookups, budget 270 ms). The
 JWKS and bearer routes read at most 20 keys, bounded in SQL by retirement time and a limit.
+The cookie variant adds only string work and has its own benchmark.
 Budgets are in `bench/`.
 
 A benchmark times `measure(operation)`: a warm-up, then several batches, gated on the fastest, so a
