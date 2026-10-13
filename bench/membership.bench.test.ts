@@ -152,6 +152,10 @@ test(
   `membership lookup over https: the best of ${BATCHES} batches of ${BATCH_REQUESTS} lookups is within ${BUDGET_HTTPS_MS} ms`,
   async () => {
     if (cert === undefined) {
+      // On CI a missing `openssl` must not let the TLS number go ungated.
+      if (process.env.CI) {
+        throw new Error('openssl could not make a certificate, so the https leg cannot be gated')
+      }
       console.log('membership lookup over https: skipped, openssl could not make a certificate')
       return
     }

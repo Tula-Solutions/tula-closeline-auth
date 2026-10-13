@@ -257,7 +257,10 @@ export function createHttpMembership(options: HttpMembershipOptions): Membership
         }
         // `stale_connection` is a kept connection core had already closed: it is a connection
         // failure, so it is retried exactly where `connection` is (a lookup, once; never a write,
-        // which the flow retries under its own key).
+        // which the flow retries under its own key). The retry is best effort: it is a new
+        // request that may take another idle socket that is also dead (the kit's fresh-socket
+        // resend is unreachable with one attempt), so a burst of dead idle sockets can surface as
+        // one 503 that the flow retries.
         const retryable =
           error.failure === 'connection' ||
           error.failure === 'stale_connection' ||

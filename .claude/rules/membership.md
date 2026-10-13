@@ -35,7 +35,8 @@ client is built (`environment` is an option, passed by `container.ts`). Connecti
 (`keepAlive: true`, passed by `container.ts`; hub issue 45): at most 32 sockets, 8 idle, closed after
 4 s idle (under core's server timeout and any load balancer's), so a lookup pays no TCP or TLS
 handshake after the first. A kept connection core had closed fails as `stale_connection`, which the
-adapter retries exactly where it retries `connection`: the lookup, once. A write is never
+adapter retries exactly where it retries `connection`: the lookup, once. That retry is best effort: it may take another idle
+socket that is also dead, so a burst of dead idle sockets can surface as one 503 the flow retries. A write is never
 resent by the adapter (the client has one attempt), so one that loses that race is 503 and the flow
 retries it under its own key. `MembershipClaims.close()` ends the pool; `container.close()` calls it
 on shutdown, so the process can exit. Do not use `fetch` for a
