@@ -159,8 +159,8 @@ an account with this address" is this attempt's own earlier request and is never
   Worst case a failed sign-up waits for its call to core (5 s) plus this abandon (5 s): 10 s.
 - 200 is done (core says no live Organization with that id remains; not that this call deleted
   it): logged at warn by ids, not reported. 409 `organization.not_abandonable` is logged by ids
-  at warn, never retried, reported. 5xx, 503 (with `Retry-After`), a timeout or a network error
-  are retried; a 4xx other than that 409 is one call (`MembershipNotRetryable`), as is a rejected
+  at warn, never retried, reported. 5xx, 503 (core's `Retry-After` is not honoured until the kit returns it), a timeout or a
+  network error are retried; a 4xx other than that 409 is one call (`MembershipNotRetryable`), as is a rejected
   secret. An unfinished abandon is logged and reported by ids.
 - A sign-up by invitation is never abandoned: the Organization has other members.
 

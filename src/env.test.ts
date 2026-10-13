@@ -172,6 +172,16 @@ describe('the core service settings', () => {
     expect(() => loadEnv({ ...DEPLOYED, ...source })).toThrow()
   })
 
+  test.each([
+    'https://core.example.com/#',
+    'https://core.example.com/?',
+    'https://core.example.com?',
+  ])('a base URL ending in a bare # or ? (%s) is reported as a CORE_BASE_URL issue', (url) => {
+    const result = envSchemaIssues({ ...DEPLOYED, CORE_BASE_URL: url })
+
+    expect(result).toContain('CORE_BASE_URL')
+  })
+
   test('a refused token is never echoed in the error', () => {
     const secret = 'Sup3rSecret-but-with a space-inside-it'
 
@@ -453,3 +463,13 @@ describe('the browser session settings', () => {
     }
   )
 })
+
+/** The paths of the issues `loadEnv` reports for `source`, as one string. */
+function envSchemaIssues(source: Record<string, string | undefined>): string {
+  try {
+    loadEnv(source)
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+  return ''
+}

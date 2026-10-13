@@ -120,7 +120,15 @@ const schema = z
       .url({ protocol: /^https?$/ })
       .refine((value) => {
         const url = new URL(value)
-        return url.username === '' && url.password === '' && url.search === '' && url.hash === ''
+        // The raw text too: a bare trailing `#` or `?` parses to an empty search or hash.
+        return (
+          url.username === '' &&
+          url.password === '' &&
+          url.search === '' &&
+          url.hash === '' &&
+          !value.includes('#') &&
+          !value.includes('?')
+        )
       }, 'CORE_BASE_URL must not carry credentials, a query or a fragment')
       .optional(),
     /**

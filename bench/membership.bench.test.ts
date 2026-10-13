@@ -10,11 +10,12 @@ import { BATCH_REQUESTS, BATCHES, measure, summary } from './measure'
 // bounded read of the answer and the concurrency slot. Measured against an in-process fake of
 // core over the loopback interface, so it times this service's side of the call plus the local
 // socket, not a real network or a real core. Typical best batch on a developer laptop:
-// 62 ms for 500 lookups (about 0.12 ms each; 41 ms with `fetch` before the kit client, which opens
-// a new connection per call); the median batch was 65 ms in the same runs (62 to 64 ms best over
-// three runs).
-// The budget is about five times the typical best batch. A regression such as a per-call
-// connection setup, a retry on every call or an unbounded read fails it.
+// 62 ms for 500 lookups (about 0.12 ms each; the median batch was 65 ms, 62 to 64 ms best over
+// three runs). The kit client opens a new connection per call, so a connection per lookup is the
+// baseline this number includes (the `fetch` adapter it replaced measured 41 ms). It is plain
+// http over loopback: no TLS handshake and no DNS.
+// The budget is about four times the typical best batch. A regression such as a retry on every
+// call or an unbounded read fails it.
 const BUDGET_MS = 270
 
 const core = startFakeCore()

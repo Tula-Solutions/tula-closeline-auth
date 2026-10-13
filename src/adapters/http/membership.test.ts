@@ -800,6 +800,56 @@ describe('what the sign-up calls carry about the person (ADR 0015)', () => {
   })
 })
 
+describe('a large error page is never read, as before the kit client', () => {
+  const page = (bytes: number) => ({ kind: 'text', status: 0, body: 'x'.repeat(bytes) }) as const
+  const big = (status: number, bytes: number): Reply => ({ ...page(bytes), status })
+
+  test('a lookup answered 503 with a 20 KiB body is attempted twice', async () => {
+    const { core, adapter } = connect()
+    core.script(big(503, 20_480), big(503, 20_480), big(503, 20_480))
+
+    await expect(adapter.forUser(user())).rejects.toBeInstanceOf(MembershipUnavailable)
+
+    expect(core.requests).toHaveLength(2)
+  })
+
+  test.each(CALL_NAMES)('%s: a 401 with a 20 KiB body is the rejected secret', async (name) => {
+    const { core, adapter } = connect()
+    core.script(big(401, 20_480))
+
+    await expect(CALLS[name](adapter)).rejects.toBeInstanceOf(CoreCredentialsRejected)
+  })
+
+  test('an abandon answered 503 with a 20 KiB body is busy', async () => {
+    const { core, adapter } = connect()
+    core.script(big(503, 20_480))
+
+    await expect(CALLS.abandonOrganization(adapter)).rejects.toBeInstanceOf(MembershipBusy)
+  })
+
+  test('a 5xx with a 100 KiB body is still bounded and still retried once', async () => {
+    const { core, adapter } = connect()
+    core.script(big(502, 100_000), big(502, 100_000))
+
+    await expect(adapter.forUser(user())).rejects.toBeInstanceOf(MembershipUnavailable)
+
+    expect(core.requests).toHaveLength(2)
+  })
+
+  test('a 200 with a 100 KiB body, and one with 20 KiB, are not believed', async () => {
+    const { core, adapter } = connect()
+    core.script(big(200, 100_000), {
+      kind: 'text',
+      status: 200,
+      body: `{"found":false,"pad":"${'x'.repeat(20_000)}"}`,
+    })
+
+    await expect(adapter.forUser(user())).rejects.toBeInstanceOf(MembershipUnavailable)
+    await expect(adapter.forUser(user())).rejects.toBeInstanceOf(MembershipUnavailable)
+    expect(core.requests).toHaveLength(2)
+  })
+})
+
 describe('abandoning an Organization', () => {
   const organizationId = () => formatId('org', crypto.randomUUID())
 

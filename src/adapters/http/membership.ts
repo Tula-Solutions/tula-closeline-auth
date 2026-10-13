@@ -68,6 +68,20 @@ export const DEFAULT_CORE_QUEUE = 256
 /** The largest answer from core that is read; the real ones are under 300 bytes. */
 const MAX_ANSWER_BYTES = 16 * 1024
 
+/**
+ * The most the kit client reads of any answer. Larger than {@link MAX_ANSWER_BYTES} so that a
+ * long error page on a 5xx or 401/403 (never parsed) still reaches the adapter as its status.
+ */
+const CLIENT_MAX_ANSWER_BYTES = 64 * 1024
+
+/** The answer's JSON when it is within {@link MAX_ANSWER_BYTES} once written out, else none. */
+function boundedJson(value: unknown): unknown {
+  if (value === undefined) {
+    return undefined
+  }
+  return Buffer.byteLength(JSON.stringify(value)) > MAX_ANSWER_BYTES ? undefined : value
+}
+
 /** Options for {@link createHttpMembership}. */
 export type HttpMembershipOptions = {
   /** Core's origin, such as `https://core.internal`; no trailing slash needed. */
@@ -182,7 +196,7 @@ export function createHttpMembership(options: HttpMembershipOptions): Membership
     secret: options.token,
     environment: options.environment,
     userAgent: 'closeline-auth',
-    maxResponseBytes: MAX_ANSWER_BYTES,
+    maxResponseBytes: CLIENT_MAX_ANSWER_BYTES,
     retry: { maxAttempts: 1 },
   })
 
@@ -213,7 +227,7 @@ export function createHttpMembership(options: HttpMembershipOptions): Membership
       })
       // Only an answer that can be used is read: a 5xx or an odd status is not.
       const readable = response.status === 200 || (response.status >= 400 && response.status < 500)
-      return { status: response.status, json: readable ? response.json : undefined }
+      return { status: response.status, json: readable ? boundedJson(response.json) : undefined }
     } catch (error) {
       if (callerSignal?.aborted) {
         throw new AttemptFailed('the call was aborted', false)
@@ -221,6 +235,11 @@ export function createHttpMembership(options: HttpMembershipOptions): Membership
       // The failure kind only: the client's error carries no secret or body, and nothing else is
       // copied from it. A redirect, an oversized or non-JSON answer cannot change on a retry.
       if (error instanceof InternalCallError) {
+        // An answer too big for the client to read is still an answer with a status: a 5xx, a
+        // 401/403 or a 4xx is handled by that status as it was when its body was never read.
+        if (error.failure === 'response_too_large' && error.status !== undefined) {
+          return { status: error.status, json: undefined }
+        }
         const retryable = error.failure === 'connection' || error.failure === 'timeout'
         throw new AttemptFailed(
           error.failure === 'timeout'
