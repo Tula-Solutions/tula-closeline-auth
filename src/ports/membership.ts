@@ -31,6 +31,31 @@ export class MembershipUnavailable extends Error {
 }
 
 /**
+ * Thrown when core's answer shows a fault that retrying cannot clear and the person cannot fix:
+ * it says the user already belongs to an Organization, though auth made that user id for this
+ * attempt alone. Unlike {@link MembershipUnavailable} it is not a temporary outage, so the caller
+ * does not tell the client to try again.
+ */
+export class MembershipFault extends Error {
+  constructor(message = 'membership answered with a fault') {
+    super(message)
+    this.name = 'MembershipFault'
+  }
+}
+
+/**
+ * Thrown (as a kind of {@link MembershipUnavailable}) when core refused the shared secret: a
+ * wrong or missing credential is a deployment fault that stays until someone fixes it, so unlike a
+ * plain outage it reaches the error tracker, a limited number of times.
+ */
+export class MembershipRejected extends MembershipUnavailable {
+  constructor(message = 'core refused the service credentials') {
+    super(message)
+    this.name = 'MembershipRejected'
+  }
+}
+
+/**
  * Organization membership, which lives in the core service (ADR 0005). Auth never stores it: it
  * asks, once per token, and stamps the answer into `org` and `role`. Every call has a timeout and
  * is idempotent on its key, so a retried sign-up cannot create a second Organization.
@@ -43,7 +68,8 @@ export interface MembershipClaims {
    * @param input.signal - Aborts when the caller has stopped waiting (the 5 second bound), so an
    *   adapter cancels the request instead of leaving it running; an aborted call is
    *   MembershipUnavailable.
-   * @throws MembershipRefused `organization_name_invalid`; MembershipUnavailable on any failure.
+   * @throws MembershipRefused `organization_name_invalid`; MembershipFault when core says the user
+   *   is already a member; MembershipUnavailable on any other failure.
    */
   createOrganization(input: {
     userId: UserId
@@ -57,7 +83,8 @@ export interface MembershipClaims {
    *
    * @param input.email - The verified address the invitation must have been sent to.
    * @param input.signal - As for {@link MembershipClaims.createOrganization}.
-   * @throws MembershipRefused `invitation_invalid`; MembershipUnavailable on any failure.
+   * @throws MembershipRefused `invitation_invalid`; MembershipFault as for
+   *   {@link MembershipClaims.createOrganization}; MembershipUnavailable on any other failure.
    */
   acceptInvitation(input: {
     userId: UserId

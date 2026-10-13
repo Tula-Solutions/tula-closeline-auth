@@ -186,6 +186,66 @@ export function describeVerificationTokenStore(
       ).toBe(3)
     })
 
+    test('a refund gives back exactly the tries counted, never goes below zero, and never past the maximum', async () => {
+      const flowAttemptId = await ctx.a.flowAttempt()
+      const input = token(ctx.a, { flowAttemptId })
+      await ctx.store.replace(input, now)
+      const attempts = async () =>
+        (await ctx.store.findLatest(ctx.a.environmentId, 'email_verification', { flowAttemptId }))
+          ?.attempts
+
+      expect(await ctx.store.refundAttempt(ctx.a.environmentId, input.id, later(1))).toBe(false)
+      expect(await attempts()).toBe(0)
+      await ctx.store.recordAttempt(ctx.a.environmentId, input.id, later(1))
+      await ctx.store.recordAttempt(ctx.a.environmentId, input.id, later(1))
+      expect(await ctx.store.refundAttempt(ctx.a.environmentId, input.id, later(2))).toBe(true)
+      expect(await attempts()).toBe(1)
+      expect(await ctx.store.refundAttempt(ctx.a.environmentId, input.id, later(2))).toBe(true)
+      expect(await ctx.store.refundAttempt(ctx.a.environmentId, input.id, later(2))).toBe(false)
+      expect(await attempts()).toBe(0)
+    })
+
+    test('concurrent refunds each give back one try, and no more than were counted', async () => {
+      const flowAttemptId = await ctx.a.flowAttempt()
+      const input = token(ctx.a, { flowAttemptId })
+      await ctx.store.replace(input, now)
+      await Promise.all(
+        Array.from({ length: 3 }, () =>
+          ctx.store.recordAttempt(ctx.a.environmentId, input.id, later(1))
+        )
+      )
+
+      const refunds = await Promise.all(
+        Array.from({ length: 8 }, () =>
+          ctx.store.refundAttempt(ctx.a.environmentId, input.id, later(2))
+        )
+      )
+
+      expect(refunds.filter(Boolean)).toHaveLength(3)
+      const after = await ctx.store.findLatest(ctx.a.environmentId, 'email_verification', {
+        flowAttemptId,
+      })
+      expect(after?.attempts).toBe(0)
+      // The tries left are the maximum, not more.
+      const counted = await Promise.all(
+        Array.from({ length: 8 }, () =>
+          ctx.store.recordAttempt(ctx.a.environmentId, input.id, later(3))
+        )
+      )
+      expect(counted.filter((result) => result !== null)).toHaveLength(3)
+    })
+
+    test('a used or foreign token is not refunded', async () => {
+      const flowAttemptId = await ctx.a.flowAttempt()
+      const input = token(ctx.a, { flowAttemptId })
+      await ctx.store.replace(input, now)
+      await ctx.store.recordAttempt(ctx.a.environmentId, input.id, later(1))
+
+      expect(await ctx.store.refundAttempt(ctx.b.environmentId, input.id, later(2))).toBe(false)
+      expect(await ctx.store.consume(ctx.a.environmentId, input.id, later(2))).toBe(true)
+      expect(await ctx.store.refundAttempt(ctx.a.environmentId, input.id, later(3))).toBe(false)
+    })
+
     test('consume is single-use', async () => {
       const flowAttemptId = await ctx.a.flowAttempt()
       const input = token(ctx.a, { flowAttemptId })

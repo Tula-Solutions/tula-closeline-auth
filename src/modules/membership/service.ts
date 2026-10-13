@@ -1,9 +1,14 @@
 import type { UserId } from 'tula-closeline-contract'
 import { isAppError } from 'tula-closeline-kit'
 import type { Container } from '~/container'
-import { AUTH_ERRORS, fail } from '~/errors'
+import { AUTH_ERRORS, fail, MembershipFaulted, MembershipOutage } from '~/errors'
 import { withTimeout } from '~/lib/timeout'
-import { type Membership, MembershipRefused } from '~/ports/membership'
+import {
+  type Membership,
+  MembershipFault,
+  MembershipRefused,
+  MembershipRejected,
+} from '~/ports/membership'
 
 /** The longest a call to the core service may take before the caller gives up on it. */
 export const MEMBERSHIP_TIMEOUT_MS = 5_000
@@ -18,18 +23,15 @@ function timedOut(controller: AbortController): Error {
 }
 
 /** Seconds a client is told to wait (`Retry-After`) when core could not answer. */
-export const MEMBERSHIP_RETRY_AFTER_SECONDS = 5
+export { MEMBERSHIP_RETRY_AFTER_SECONDS } from '~/errors'
 
 /**
  * The error a membership call that did not answer in time or failed turns into (503 with
  * `Retry-After`). Nothing was issued, counted or rotated, so the client retries the same request.
+ * A rejected shared secret is marked as a deployment fault, which the error handler reports.
  */
 function unavailable(cause: unknown) {
-  return fail(
-    AUTH_ERRORS['membership.unavailable'],
-    { retryAfter: MEMBERSHIP_RETRY_AFTER_SECONDS },
-    cause
-  )
+  return new MembershipOutage(cause, cause instanceof MembershipRejected)
 }
 
 /** Turns what the membership port throws into a contract error; anything unexpected is a 503. */
@@ -40,6 +42,10 @@ function translate(error: unknown) {
         ? AUTH_ERRORS['signup.invitation_invalid']
         : AUTH_ERRORS['signup.organization_name_invalid']
     )
+  }
+  if (error instanceof MembershipFault) {
+    // Not an outage: retrying cannot clear it. The flow reports it (once per attempt).
+    return new MembershipFaulted(error)
   }
   return unavailable(error)
 }
@@ -56,8 +62,10 @@ export type JoinRequest =
  * `idempotencyKey` is fixed per sign-up attempt, so a retry after a failure or a crash returns
  * the same membership instead of creating a second Organization.
  *
- * @throws AppError `signup.invitation_invalid`, `signup.organization_name_invalid`, or
- *   `membership.unavailable` when core is down, slow or answers something unexpected.
+ * @throws AppError `signup.invitation_invalid`, `signup.organization_name_invalid`,
+ *   {@link MembershipOutage} (`membership.unavailable`) when core is down, slow or answers
+ *   something unexpected, or {@link MembershipFaulted} (500) when core says the new user already
+ *   belongs to an Organization.
  */
 export async function join(
   deps: MembershipDeps,

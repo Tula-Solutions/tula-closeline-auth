@@ -3,7 +3,7 @@ import { isAppError } from 'tula-closeline-kit'
 import { z } from 'zod'
 import type { Container } from '~/container'
 import { describeError } from '~/describe-error'
-import { AUTH_ERRORS, fail, rateLimited } from '~/errors'
+import { AUTH_ERRORS, fail, MembershipFaulted, MembershipOutage, rateLimited } from '~/errors'
 import { randomToken, sha256Hex, timingSafeEqual } from '~/lib/crypto'
 import { durationToMs } from '~/lib/duration'
 import { maskEmail, normalizeEmail, parseEmail } from '~/lib/email'
@@ -307,6 +307,42 @@ export async function reportOrphan(
 }
 
 /**
+ * Tells the deployment that core said a brand new user already belongs to an Organization (a
+ * fault on one side: auth makes the user id for this attempt alone). Ids only, never an address.
+ * Logged every time, reported to the tracker once per attempt per hour, so a client retrying
+ * cannot flood it. It never throws. Exported for its tests.
+ */
+export async function reportMembershipFault(
+  deps: Pick<Container, 'logger' | 'rateLimiter'>,
+  context: ClientContext,
+  fault: { userId: string; attemptId: string }
+): Promise<void> {
+  const { userId, attemptId } = fault
+  try {
+    deps.logger.warn('core says a new user already belongs to an Organization', {
+      userId,
+      attemptId,
+    })
+    const first = await deps.rateLimiter.hit(
+      `membership_fault:${attemptId}`,
+      1,
+      ORPHAN_REPORT_WINDOW_MS
+    )
+    if (first.allowed) {
+      context.report(
+        new Error(
+          `core says user ${userId} already belongs to an Organization (attempt ${attemptId}); ` +
+            'a sign-up makes a new user id, so one side is at fault'
+        ),
+        500
+      )
+    }
+  } catch {
+    // Reporting must never change what the caller is told.
+  }
+}
+
+/**
  * Completes a sign-up with the emailed code: creates the account and its Organization membership,
  * then the first session.
  *
@@ -323,8 +359,11 @@ export async function reportOrphan(
  * The code is checked first but spent only after the account exists, and spending it and closing
  * the attempt are best-effort: once the account is committed a failure of either (a thrown
  * error) cannot turn a completed sign-up into an error (the user can always sign in). Only the
- * answer "already spent" is refused, which is what keeps a code single-use. If core refuses or is down, nothing was
- * written, the code is still good and the answer is a contract error.
+ * answer "already spent" is refused, which is what keeps a code single-use. If core refuses or is
+ * down, nothing was written, the code is still good and the answer is a contract error; when core
+ * is down the try the code cost is given back, so an outage never uses up a correct code. A fault
+ * in core (it says the new user is already a member) is a 500 that is reported once per attempt;
+ * its try is not given back.
  */
 export async function verifyEmail(
   deps: Container,
@@ -360,7 +399,21 @@ export async function verifyEmail(
     throw fail(AUTH_ERRORS['flow.invalid_step'])
   }
   const userUuid = formatId('usr', userId) as UserId
-  const membership = await Membership.join(deps, userUuid, join, `signup:${attempt.id}`)
+  let membership: Awaited<ReturnType<typeof Membership.join>>
+  try {
+    membership = await Membership.join(deps, userUuid, join, `signup:${attempt.id}`)
+  } catch (error) {
+    if (error instanceof MembershipOutage) {
+      // The code matched and core could not be asked: that try is not the person's to lose.
+      await bestEffort(deps, 'giving back the try', attempt.id, () =>
+        Verification.refundAttempt(deps, tenant, tokenId)
+      )
+    } else if (error instanceof MembershipFaulted) {
+      // A fault that retrying cannot clear: the try stays spent, so the code runs out.
+      await reportMembershipFault(deps, context, { userId: userUuid, attemptId: attempt.id })
+    }
+    throw error
+  }
   // From here core has made an Organization: if the account is not written, nobody owns it.
   const orphan = (why: string, status: number) =>
     reportOrphan(deps, context, status, {

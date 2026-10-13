@@ -21,7 +21,9 @@ import type { z } from 'zod'
 import {
   type Membership,
   type MembershipClaims,
+  MembershipFault,
   MembershipRefused,
+  MembershipRejected,
   MembershipUnavailable,
 } from '~/ports/membership'
 
@@ -68,10 +70,10 @@ export type HttpMembershipOptions = {
 
 /**
  * Core answered 401 or 403: the shared secret is wrong or not configured over there. A
- * deployment fault, not a transient one, so it is never retried; it reaches the error reporter
- * (every 5xx does) with this class name and no secret, and the user sees 503 like any outage.
+ * deployment fault, not a transient one, so it is never retried; the error handler reports it
+ * under this class name (no secret), at most once a minute, and the user sees 503 like any outage.
  */
-export class CoreCredentialsRejected extends MembershipUnavailable {
+export class CoreCredentialsRejected extends MembershipRejected {
   constructor(status: number) {
     super(`core refused the service credentials (HTTP ${status}); check CORE_INTERNAL_TOKEN`)
     this.name = 'CoreCredentialsRejected'
@@ -260,8 +262,9 @@ export function createHttpMembership(options: HttpMembershipOptions): Membership
         throw new MembershipRefused('invitation_invalid')
       }
       // Auth makes a fresh user id for every sign-up attempt, so core saying the user already
-      // belongs to an Organization is a fault on one side, not something the person can fix.
-      throw new MembershipUnavailable('core says the user already belongs to an Organization')
+      // belongs to an Organization is a fault on one side: retrying cannot clear it and the
+      // person cannot fix it, so it is not the outage that `membership.unavailable` means.
+      throw new MembershipFault('core says the user already belongs to an Organization')
     }
     throw new MembershipUnavailable(`core answered HTTP ${answer.status}`)
   }

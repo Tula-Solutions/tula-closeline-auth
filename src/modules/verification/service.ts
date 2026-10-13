@@ -152,6 +152,20 @@ export async function verifyCode(
   return token.id
 }
 
+/**
+ * Gives back the try {@link verifyCode} counted for a code that matched, when what the code
+ * unlocks could not be done because core was down: the person did nothing wrong, and five
+ * outages must not use up a correct code. Call it once per successful `verifyCode`, and never
+ * for a wrong code.
+ */
+export async function refundAttempt(
+  deps: Pick<Container, 'clock' | 'verificationTokens'>,
+  tenant: Pick<Tenant, 'environmentId'>,
+  tokenId: string
+): Promise<void> {
+  await deps.verificationTokens.refundAttempt(tenant.environmentId, tokenId, deps.clock.now())
+}
+
 /** Uses up a verified code; a second use of the same code fails with `verification.expired`. */
 export async function consume(
   deps: Pick<Container, 'clock' | 'verificationTokens'>,

@@ -120,6 +120,21 @@ export interface VerificationTokenStore {
   ): Promise<VerificationTokenRecord | null>
 
   /**
+   * Give back one try that {@link VerificationTokenStore.recordAttempt} counted for the caller's
+   * own request, because the code matched and what it unlocks failed for a reason that is not the
+   * person's (core being down). One guarded UPDATE, so it is safe under concurrency: it only
+   * lowers a counter that is above zero, on a token that is still unused, so the tries left can
+   * never rise above `maxAttempts` (a refund without a counted try finds nothing to give back).
+   * The caller refunds only after a match, so a wrong guess is never given back.
+   *
+   * @param environmentId - The token's environment.
+   * @param id - Token id.
+   * @param now - Current time.
+   * @returns `false` when nothing was given back (consumed, or no try counted).
+   */
+  refundAttempt(environmentId: string, id: string, now: Date): Promise<boolean>
+
+  /**
    * Mark a token used. Single-use: only the first caller wins.
    *
    * @param environmentId - The token's environment.

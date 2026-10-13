@@ -131,6 +131,27 @@ export class PostgresVerificationTokenStore implements VerificationTokenStore {
   }
 
   /** @inheritdoc */
+  async refundAttempt(environmentId: string, id: string, now: Date): Promise<boolean> {
+    // One guarded UPDATE: it only lowers a counter above zero on an unused token, so the tries
+    // left can never exceed max_attempts however many refunds race.
+    const rows = await withEnvironment(this.db, environmentId, (tx) =>
+      tx
+        .update(verificationTokens)
+        .set({ attempts: sql`${verificationTokens.attempts} - 1`, updatedAt: now })
+        .where(
+          and(
+            eq(verificationTokens.id, id),
+            eq(verificationTokens.environmentId, environmentId),
+            isNull(verificationTokens.consumedAt),
+            gt(verificationTokens.attempts, 0)
+          )
+        )
+        .returning({ id: verificationTokens.id })
+    )
+    return rows.length === 1
+  }
+
+  /** @inheritdoc */
   async consume(environmentId: string, id: string, now: Date): Promise<boolean> {
     const rows = await withEnvironment(this.db, environmentId, (tx) =>
       tx

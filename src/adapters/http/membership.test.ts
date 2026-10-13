@@ -8,7 +8,7 @@ import {
 } from 'tula-closeline-contract'
 import { membershipSuite } from '~/adapters/membership.suite'
 import { describeError } from '~/describe-error'
-import { MembershipRefused, MembershipUnavailable } from '~/ports/membership'
+import { MembershipFault, MembershipRefused, MembershipUnavailable } from '~/ports/membership'
 import { type FakeCore, type Reply, startFakeCore } from '~/testing/fake-core'
 import {
   CoreCredentialsRejected,
@@ -416,8 +416,12 @@ describe('what core can answer', () => {
       expect(error).toMatchObject({ reason: 'invitation_invalid' })
     } else if (CORE_ERRORS[code].status === 403) {
       expect(error).toBeInstanceOf(CoreCredentialsRejected)
+    } else if (code === 'membership.already_member' && name !== 'membership') {
+      // Auth makes a fresh user id for every sign-up, so this is a fault, not an outage. (A lookup
+      // is never allowed to get it, so there it is just an answer that is not believed.)
+      expect(error).toBeInstanceOf(MembershipFault)
+      expect(error).not.toBeInstanceOf(MembershipUnavailable)
     } else {
-      // Including `membership.already_member`, which auth never causes (it makes a fresh user id).
       expect(error).toBeInstanceOf(MembershipUnavailable)
       expect(error).not.toBeInstanceOf(MembershipRefused)
     }

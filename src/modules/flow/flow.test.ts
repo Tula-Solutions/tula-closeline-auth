@@ -125,7 +125,8 @@ describe('sign-up', () => {
 
     expect(failed.status).toBe(503)
     expect(failed.body).toMatchObject({ error: { code: 'membership.unavailable' } })
-    expect(deps.reported).toHaveLength(1)
+    // An outage is logged, not reported per request (it would be one report for each client).
+    expect(deps.reported).toHaveLength(0)
     expect(await deps.users.findByEmail(deps.tenant.current?.environmentId ?? '', email)).toBeNull()
     const early = await call(app, 'POST', '/v1/client/sign-ins', { body: { identifier: email } })
     const attempt = { attempt: text(early.body, 'attemptSecret') }

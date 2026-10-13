@@ -4,9 +4,10 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { ERRORS, type ErrorDefinition, type RequestId } from 'tula-closeline-contract'
 import { isAppError, toErrorBody } from 'tula-closeline-kit'
 import { type Container, reportSafely } from '~/container'
-import { Overloaded } from '~/errors'
+import { MembershipOutage, Unreported } from '~/errors'
 import { REQUEST_ID_HEADER } from '~/http/request-id'
 import type { AppEnv } from '~/http/types'
+import { createThrottle } from '~/lib/throttle'
 
 /** Errors with this status or above are the service's fault and go to `reportError`. */
 const SERVER_ERROR = 500
@@ -16,6 +17,12 @@ const CLIENT_ERROR = 400
 
 /** The highest HTTP status. */
 const MAX_STATUS = 599
+
+/** The shortest time between two reports of one kind of deployment fault in core. */
+export const FAULT_REPORT_WINDOW_MS = 60_000
+
+/** The most kinds of fault remembered by the report throttle (there are only a few). */
+const FAULT_REPORT_KEYS = 32
 
 /**
  * The registry error each HTTP status maps to. A status missing here is a client error that keeps
@@ -72,6 +79,28 @@ export function createErrorHandler(container: Container): ErrorHandler<AppEnv> {
       status,
     })
 
+  // Best-effort and per process, so a stream of one fault is a report a minute, not one each.
+  const faultReports = createThrottle({
+    windowMs: FAULT_REPORT_WINDOW_MS,
+    maxKeys: FAULT_REPORT_KEYS,
+    now: () => container.clock.now().getTime(),
+  })
+
+  /**
+   * Core could not answer: every such request is logged at warn with the class of the cause (a
+   * fixed word, never a message). Only a fault the deployment must fix (a rejected shared
+   * secret) is reported, once a minute per class; an outage is not reported per request.
+   */
+  const noteOutage = (error: MembershipOutage, c: Context<AppEnv>) => {
+    container.logger.warn('membership is unavailable', {
+      cause: error.causeClass,
+      requestId: c.get('requestId'),
+    })
+    if (error.deploymentFault && faultReports.allow(error.causeClass)) {
+      report(error, c, error.status)
+    }
+  }
+
   const internal = (error: unknown, c: Context<AppEnv>) => {
     report(error, c, SERVER_ERROR)
     return respond(c, ERRORS['server.internal'])
@@ -82,7 +111,9 @@ export function createErrorHandler(container: Container): ErrorHandler<AppEnv> {
       if (!isErrorStatus(error.status)) {
         return internal(error, c)
       }
-      if (error.status >= SERVER_ERROR && !(error instanceof Overloaded)) {
+      if (error instanceof MembershipOutage) {
+        noteOutage(error, c)
+      } else if (error.status >= SERVER_ERROR && !(error instanceof Unreported)) {
         report(error, c, error.status)
       }
       // A wait the body names (`details.retryAfter`, seconds) is also sent as the header.

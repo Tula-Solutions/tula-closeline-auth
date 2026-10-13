@@ -87,6 +87,21 @@ export class MemoryVerificationTokenStore implements VerificationTokenStore {
   }
 
   /** @inheritdoc */
+  async refundAttempt(environmentId: string, id: string, _now: Date): Promise<boolean> {
+    const token = this.#tokens.find(
+      (candidate) =>
+        candidate.id === id &&
+        candidate.environmentId === environmentId &&
+        candidate.consumedAt === null
+    )
+    if (!token || token.attempts <= 0) {
+      return false
+    }
+    token.attempts -= 1
+    return true
+  }
+
+  /** @inheritdoc */
   async consume(environmentId: string, id: string, now: Date): Promise<boolean> {
     const token = this.#usable(environmentId, id, now)
     if (!token) {
