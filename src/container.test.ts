@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test'
+import { createServer } from 'node:http'
+import type { Socket } from 'node:net'
 import { formatId } from 'tula-closeline-contract'
 import { MemoryLockout } from '~/adapters/memory/lockout'
 import { MemoryRateLimiter } from '~/adapters/memory/rate-limiter'
@@ -192,6 +194,44 @@ describe('which membership adapter the container builds', () => {
       expect(core.requests[0]?.headers.authorization).toBe(`Bearer ${core.secret}`)
     } finally {
       await core.stop()
+    }
+  })
+
+  test('the container keeps its connection to core between lookups and closes it on shutdown', async () => {
+    const sockets: Socket[] = []
+    const server = createServer((request, response) => {
+      request.resume()
+      response.setHeader('content-type', 'application/json')
+      response.end('{"found":false}')
+    })
+    server.on('connection', (socket) => sockets.push(socket))
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (address === null || typeof address === 'string') {
+      throw new Error('no port')
+    }
+    const container = createContainer(
+      loadEnv({
+        ENVIRONMENT: 'local',
+        REGION: 'us',
+        LOG_LEVEL: 'silent',
+        CORE_BASE_URL: `http://127.0.0.1:${address.port}`,
+        CORE_INTERNAL_TOKEN: 'k'.repeat(40),
+      })
+    )
+    try {
+      await container.membership.forUser(userId)
+      await container.membership.forUser(userId)
+      await container.membership.forUser(userId)
+      expect(sockets).toHaveLength(1)
+
+      await container.close()
+      await Bun.sleep(20)
+
+      expect(sockets[0]?.destroyed).toBe(true)
+    } finally {
+      server.closeAllConnections()
+      server.close()
     }
   })
 

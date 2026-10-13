@@ -27,11 +27,19 @@ The runtime adapter is `src/adapters/http/membership.ts`, over HTTP to core's in
 `/internal/organizations/{id}/abandon`) with
 `Authorization: Bearer <CORE_INTERNAL_TOKEN>` and an `Idempotency-Key`. Every answer is parsed with the contract's
 schema; one that does not parse is core being unavailable. The transport is the kit's
-`createInternalClient` (ADR 0013): `node:http(s)` with no agent, so a proxy variable in the
-environment (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, any case) is never read and the secret never
-travels through a proxy; a new connection per call, certificates verified, and the service refuses
-to boot with `NODE_TLS_REJECT_UNAUTHORIZED=0` outside `local`. The adapter is the only place the
-client is built (`environment` is an option, passed by `container.ts`). Do not use `fetch` for a
+`createInternalClient` (ADR 0013): `node:http(s)` with the client's own private agent, never the
+global one, so a proxy variable in the environment (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, any
+case) is never read and the secret never travels through a proxy; certificates verified, and the
+service refuses to boot with `NODE_TLS_REJECT_UNAUTHORIZED=0` outside `local`. The adapter is the only place the
+client is built (`environment` is an option, passed by `container.ts`). Connections are kept alive
+(`keepAlive: true`, passed by `container.ts`; hub issue 45): at most 32 sockets, 8 idle, closed after
+4 s idle (under core's server timeout and any load balancer's), so a lookup pays no TCP or TLS
+handshake after the first. A kept connection core had closed fails as `stale_connection`, which the
+adapter retries exactly where it retries `connection`: the lookup, once. That retry is best effort: it may take another idle
+socket that is also dead, so a burst of dead idle sockets can surface as one 503 the flow retries. A write is never
+resent by the adapter (the client has one attempt), so one that loses that race is 503 and the flow
+retries it under its own key. `MembershipClaims.close()` ends the pool; `container.close()` calls it
+on shutdown, so the process can exit. Do not use `fetch` for a
 call to core; `membership.proxy.test.ts` (a child process with a stand-in proxy named in all six
 variables) fails if a call reaches the proxy. Redirects are never followed, and the
 secret, an invitation token, an address or a body of core never reach a log or an error message

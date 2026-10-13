@@ -95,6 +95,14 @@ export type HttpMembershipOptions = {
    * `NODE_TLS_REJECT_UNAUTHORIZED=0` is set outside `local`, which surfaces as a boot error.
    */
   environment: Environment
+  /**
+   * Keep connections to core open between calls (the kit client's `keepAlive`: its own private
+   * pool of at most 32 sockets, 8 kept idle, closed after 4 s idle). Defaults to `true`; a lookup
+   * then pays no TCP or TLS handshake after the first. `false` opens a connection per call.
+   */
+  keepAlive?: boolean
+  /** An extra certificate authority (PEM) to trust for core's certificate; verification stays on. */
+  ca?: string
   /** One lookup attempt's bound; defaults to {@link LOOKUP_ATTEMPT_TIMEOUT_MS}. */
   lookupTimeoutMs?: number
   /** A sign-up call's bound; defaults to {@link WRITE_TIMEOUT_MS}. */
@@ -187,8 +195,9 @@ export function createHttpMembership(options: HttpMembershipOptions): Membership
   const lookupTimeoutMs = options.lookupTimeoutMs ?? LOOKUP_ATTEMPT_TIMEOUT_MS
   const writeTimeoutMs = options.writeTimeoutMs ?? WRITE_TIMEOUT_MS
   const retryDelayMs = options.retryDelayMs ?? defaultRetryDelayMs
-  // The kit's client is the only transport: `node:http(s)` with no agent, so a proxy variable in
-  // the environment is never read (ADR 0013). Its own retry is turned down to one attempt: the
+  // The kit's client is the only transport: `node:http(s)` with its own agent (or none), never the
+  // global one, so a proxy variable in the environment is never read (ADR 0013; the kit's probe
+  // proves it with keep-alive on). Its own retry is turned down to one attempt: the
   // retry rules below are this adapter's (a read, once, on any 5xx), and a second layer would
   // multiply the attempts and the time bound.
   const core: InternalClient = createInternalClient({
@@ -198,6 +207,8 @@ export function createHttpMembership(options: HttpMembershipOptions): Membership
     userAgent: 'closeline-auth',
     maxResponseBytes: CLIENT_MAX_ANSWER_BYTES,
     retry: { maxAttempts: 1 },
+    keepAlive: options.keepAlive ?? true,
+    ...(options.ca === undefined ? {} : { ca: options.ca }),
   })
 
   const limiter = createConcurrencyLimiter({
@@ -244,7 +255,16 @@ export function createHttpMembership(options: HttpMembershipOptions): Membership
         if (error.failure === 'response_too_large' && error.status !== undefined) {
           return { status: error.status, json: undefined }
         }
-        const retryable = error.failure === 'connection' || error.failure === 'timeout'
+        // `stale_connection` is a kept connection core had already closed: it is a connection
+        // failure, so it is retried exactly where `connection` is (a lookup, once; never a write,
+        // which the flow retries under its own key). The retry is best effort: it is a new
+        // request that may take another idle socket that is also dead (the kit's fresh-socket
+        // resend is unreachable with one attempt), so a burst of dead idle sockets can surface as
+        // one 503 that the flow retries.
+        const retryable =
+          error.failure === 'connection' ||
+          error.failure === 'stale_connection' ||
+          error.failure === 'timeout'
         throw new AttemptFailed(
           error.failure === 'timeout'
             ? 'core did not answer in time'
@@ -340,6 +360,8 @@ export function createHttpMembership(options: HttpMembershipOptions): Membership
   }
 
   return {
+    close: () => core.close(),
+
     async createOrganization({
       userId,
       name,
