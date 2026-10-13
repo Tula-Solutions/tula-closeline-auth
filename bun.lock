@@ -10,7 +10,7 @@
         "hono": "^4.13.13",
         "jose": "^6.2.12",
         "pg": "^8.23.1",
-        "tula-closeline-contract": "git+ssh://git@github.com/Tula-Solutions/tula-closeline-contract.git#v0.3.0",
+        "tula-closeline-contract": "git+ssh://git@github.com/Tula-Solutions/tula-closeline-contract.git#v0.4.0",
         "tula-closeline-db": "git+ssh://git@github.com/Tula-Solutions/tula-closeline-db.git#v0.3.0",
         "tula-closeline-kit": "git+ssh://git@github.com/Tula-Solutions/tula-closeline-kit.git#v0.3.0",
         "zod": "^4.6.5",
@@ -155,7 +155,7 @@
 
     "thread-stream": ["thread-stream@4.2.0", "", { "dependencies": { "real-require": "^1.0.0" } }, "sha512-e2zZ96wSChazBsbENf/Pcm/4swHt2cEKQ92rhUjkL9GCKiTDJIaTBenjE/m9DXi0QBmTMDkFDdOomUy20A1tDQ=="],
 
-    "tula-closeline-contract": ["tula-closeline-contract@git+ssh://git@github.com/Tula-Solutions/tula-closeline-contract.git#e93ac3e668b47d1a549307c5e2efec1ca0900230", { "peerDependencies": { "zod": "^4.6.5" } }, "e93ac3e668b47d1a549307c5e2efec1ca0900230"],
+    "tula-closeline-contract": ["tula-closeline-contract@git+ssh://git@github.com/Tula-Solutions/tula-closeline-contract.git#b74769e072fc5f43b1ed9f5003b4b6a291ea9bab", { "peerDependencies": { "zod": "^4.6.5" } }, "b74769e072fc5f43b1ed9f5003b4b6a291ea9bab"],
 
     "tula-closeline-db": ["tula-closeline-db@git+ssh://git@github.com/Tula-Solutions/tula-closeline-db.git#11c9e2d9b2416ba60bf99b4a8054c952a2d329ea", { "dependencies": { "drizzle-orm": "^0.45.3", "pg": "^8.23.1" } }, "11c9e2d9b2416ba60bf99b4a8054c952a2d329ea"],
 
@@ -170,5 +170,7 @@
     "yaml": ["yaml@2.9.1", "", { "bin": { "yaml": "bin.mjs" } }, "sha512-3NxN8+78OdzbT7C/WjGsyfPAtJaN3FNDsWxv7Y7mcDsT/oOmgW8BpyQQFFBnvZE3j9Y2Sdz1ULFLezL7Eb2yFw=="],
 
     "zod": ["zod@4.6.5", "", {}, "sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q=="],
+
+    "tula-closeline-kit/tula-closeline-contract": ["tula-closeline-contract@git+ssh://git@github.com/Tula-Solutions/tula-closeline-contract.git#e93ac3e668b47d1a549307c5e2efec1ca0900230", { "peerDependencies": { "zod": "^4.6.5" } }, "e93ac3e668b47d1a549307c5e2efec1ca0900230"],
   }
 }

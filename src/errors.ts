@@ -1,4 +1,4 @@
-import { defineErrors, ERRORS, type ErrorDefinition } from 'tula-closeline-contract'
+import { defineErrors, ERRORS, type ErrorDefinition, SIGNUP_ERRORS } from 'tula-closeline-contract'
 import { AppError } from 'tula-closeline-kit'
 
 /** The service's own errors, as `area.reason` codes with their HTTP status and default message. */
@@ -6,10 +6,6 @@ export const AUTH_ERRORS = {
   ...defineErrors('auth', {
     invalid_credentials: { status: 401, message: 'The email address or password is not right.' },
     user_banned: { status: 403, message: 'This account cannot sign in.' },
-    no_organization: {
-      status: 403,
-      message: 'This account does not belong to an Organization, so it cannot sign in.',
-    },
   }),
   ...defineErrors('email', {
     invalid: { status: 422, message: 'Enter a valid email address.' },
@@ -33,16 +29,9 @@ export const AUTH_ERRORS = {
     not_found: { status: 404, message: 'This sign-in or sign-up was not found or has ended.' },
     invalid_step: { status: 409, message: 'This step is not available now. Start again.' },
   }),
-  ...defineErrors('signup', {
-    invitation_invalid: { status: 422, message: 'The invitation is not valid.' },
-    organization_name_invalid: { status: 422, message: 'Enter a valid Organization name.' },
-  }),
-  ...defineErrors('membership', {
-    unavailable: {
-      status: 503,
-      message: 'Organization membership is unavailable right now. Try again shortly.',
-    },
-  }),
+  // `auth.no_organization`, `signup.invitation_invalid`, `signup.organization_name_invalid` and
+  // `membership.unavailable` come from the contract.
+  ...SIGNUP_ERRORS,
   ...defineErrors('mail', {
     unavailable: { status: 503, message: 'The email could not be sent right now. Try again.' },
   }),
