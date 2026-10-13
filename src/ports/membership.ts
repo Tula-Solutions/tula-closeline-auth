@@ -99,6 +99,12 @@ export class MembershipNotAbandonable extends Error {
  */
 export interface MembershipClaims {
   /**
+   * Releases what the adapter holds open (kept connections to core); called once on shutdown, so
+   * the process can exit. Calls made afterwards fail. An adapter that holds nothing omits it.
+   */
+  close?(): void
+
+  /**
    * Create an Organization for a user who is signing up; the user becomes its Owner.
    *
    * @param input.email - The verified address the account is created with (sent to core, which

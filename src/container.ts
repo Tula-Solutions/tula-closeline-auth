@@ -122,7 +122,7 @@ export type Container = {
   limits: WorkLimits
   /** Whether a password appears in known breaches. */
   breachChecker: BreachChecker
-  /** Releases what the container holds (database connections); call once on shutdown. */
+  /** Releases what the container holds (connections to core and the database); call once on shutdown. */
   close: () => Promise<void>
 }
 
@@ -166,6 +166,9 @@ export function createMembership(env: Env, logger: Pick<Logger, 'warn'>): Member
       logger,
       concurrency: env.CORE_CONCURRENCY,
       queue: env.CORE_QUEUE,
+      // Refresh and sign-in each look the user up, so reuse the connection to core: no TCP or TLS
+      // handshake per lookup (hub issue 45). Closed with the container.
+      keepAlive: true,
     })
   }
   if (env.ENVIRONMENT === 'local') {
@@ -221,6 +224,8 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     },
   }
 
+  const membership = createMembership(env, logger)
+
   return {
     env,
     logger,
@@ -248,7 +253,7 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     signingKeys: createPostgresSigningKeyStore(database.db),
     secretBox: createSecretBox(masterKey(env)),
     keyedHash: createKeyedHash(masterKey(env)),
-    membership: createMembership(env, logger),
+    membership,
     users: new PostgresUserRepository(database.db),
     flowAttempts: new PostgresFlowAttemptStore(database.db),
     verificationTokens: new PostgresVerificationTokenStore(database.db),
@@ -263,7 +268,11 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     exclusive: createPostgresExclusiveRunner(database.db),
     limits: createWorkLimits(env),
     breachChecker: new HibpBreachChecker({ logger }),
-    close: database.close,
+    close: async () => {
+      // Kept connections to core first, so the process can exit; then the database pool.
+      membership.close?.()
+      await database.close()
+    },
     reportError: (error, context) => {
       logger.error('unhandled error', { ...context, error: describeError(error) })
     },

@@ -93,7 +93,7 @@ warn, one line per failed request, and not reported; a rejected secret is report
 per cause class (`src/http/errors.ts`). Core saying a new user already belongs to an Organization is a fault: 500,
 no `Retry-After`, reported once per attempt, the try stays spent. Calls to core are capped
 (`CORE_CONCURRENCY`, `CORE_QUEUE`); past the cap a call is 503 at once. They go through the kit's
-`createInternalClient` (ADR 0013), never `fetch`, so no proxy variable can reroute them, and the
+`createInternalClient` (ADR 0013, keep-alive on, closed by `container.close()`), never `fetch`, so no proxy variable can reroute them, and the
 service refuses to boot with `NODE_TLS_REJECT_UNAUTHORIZED=0` outside `local`; the adapter owns
 retrying (the client is built with one attempt). On an abandon 503 the adapter passes core's `Retry-After` (kit `retryAfterMs`) on and the abandon loop caps the pause at 1 s.
 
@@ -174,11 +174,12 @@ sessions, Organizations and signing keys: one token lookup by hash, one user loo
 active-key read, one membership read to core (one HTTP call, retried at most once, 4.15 s worst
 case, asked once per request; only a token spent beyond grace and an expired token cost no call),
 one signature, one rotation. The JWKS and bearer routes read at most 20 keys. The membership
-lookup through the HTTP adapter is a hot path too (`bench/membership.bench.test.ts`: best batch
-about 62 ms per 500 lookups, budget 270 ms). That benchmark is plain http over loopback (no TLS,
-no DNS) and the kit client keeps no connection alive, so production pays a TLS handshake per
-lookup inside the 2 s attempt bound; the phase load test must cover this path. A keep-alive option
-in kit is hub issue 45. Budgets are in `bench/`.
+lookup through the HTTP adapter is a hot path too (`bench/membership.bench.test.ts`, per 500
+lookups, best batch: plain http 32 ms, https with a throwaway certificate 38 ms; budgets 130 and
+160 ms). The kit client keeps connections alive (`keepAlive: true`, hub issue 45): without it the
+same legs cost 64 ms and 540 ms, the difference being the TCP and TLS handshake per lookup (62 ms
+and budget 270 ms before). Not measured: DNS, a real load balancer's idle timeout, port exhaustion;
+the phase load test must cover this path with TLS. Budgets are in `bench/`.
 
 A benchmark times `measure(operation)`: a warm-up, then several batches, gated on the fastest, so a
 noisy runner cannot fail it but a real regression does. Budget is about 5x the typical best batch,
