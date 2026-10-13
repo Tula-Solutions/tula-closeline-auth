@@ -1,5 +1,6 @@
 import { createFixedClock, createLogger, type FixedClock } from 'tula-closeline-kit'
 import { MemoryBreachChecker } from '~/adapters/memory/breach-checker'
+import { createMemoryExclusiveRunner } from '~/adapters/memory/exclusive-runner'
 import { createMemoryFixedProject } from '~/adapters/memory/fixed-project'
 import { MemoryFlowAttemptStore } from '~/adapters/memory/flow-attempts'
 import { MemoryLockout } from '~/adapters/memory/lockout'
@@ -81,6 +82,7 @@ export function createTestDeps(
     mailer: new MemoryMailer(),
     rateLimiter: new MemoryRateLimiter(clock),
     lockout: new MemoryLockout(clock),
+    exclusive: createMemoryExclusiveRunner(),
     breachChecker: new MemoryBreachChecker(overrides.breached),
     close: async () => {},
     reportError: (error, context) => {

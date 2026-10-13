@@ -1,4 +1,5 @@
 import { createDb, type Database } from 'tula-closeline-db'
+import { createPostgresExclusiveRunner } from '~/adapters/postgres/exclusive-runner'
 import { createPostgresFixedProject } from '~/adapters/postgres/fixed-project'
 import { PostgresFlowAttemptStore } from '~/adapters/postgres/flow-attempts'
 import { PostgresSessionStore } from '~/adapters/postgres/sessions'
@@ -26,6 +27,7 @@ export async function createPostgresDeps(): Promise<
     flowAttempts: new PostgresFlowAttemptStore(handle.db),
     verificationTokens: new PostgresVerificationTokenStore(handle.db),
     sessions: new PostgresSessionStore(handle.db),
+    exclusive: createPostgresExclusiveRunner(handle.db),
     stop: handle.close,
     db: handle.db,
   })

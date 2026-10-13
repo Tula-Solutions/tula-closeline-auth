@@ -55,7 +55,8 @@ The shape in `.claude/COMMON.md` is built; modules are under `src/modules/<name>
   advisory lock), `jwks` (keys, rotation, `/.well-known/jwks.json`), `token` (signs `at+jwt`),
   `flow` (sign-up and sign-in), `verification` (emailed codes), `password`, `membership` (the
   port to the core service, with a 5 s bound), `session` (create, refresh, sign-out, list,
-  authenticate), `user` (`/v1/client/me`), `conformance` (the scenario runner).
+  authenticate), `user` (`/v1/client/me`), `retention` (the purge, below), `conformance` (the
+  scenario runner).
 - Readiness checks `database` and `bootstrap`; shutdown as in the template (`src/shutdown.ts`).
 - `openapi.json` is generated: `bun run openapi`; `verify` fails if it is stale.
 
@@ -87,12 +88,26 @@ Sign-in and refresh read the Organization (`forUser`) before any session or toke
 account with none gets `auth.no_organization` (403), is reported through `reportError`, and gets
 no session and no token.
 
+## Retention
+
+Sign-in data is short-lived: an attempt lives 10
+minutes and a code 10 minutes, and an abandoned sign-up holds an argon2id hash, the Organization
+name and a sealed invitation, so they must not be kept. `modules/retention` deletes attempts (and,
+by cascade, their codes) and then codes whose `expiresAt` has passed, `RETENTION_BATCH_SIZE` rows
+per statement, repeating while a batch comes back full. It runs at boot (not awaited) and every
+`RETENTION_INTERVAL_MS`, each run under a Postgres advisory lock (`ExclusiveRunner`, so only one
+instance purges at a time and the others skip) and bounded by `RETENTION_RUN_TIMEOUT_MS`. A failed
+or timed-out run is logged (no row data) and the next interval tries again. Shutdown stops it
+before the pool closes. Sessions, refresh tokens and signing keys are not purged by this service
+yet.
+
 ## Env keys (`src/env.ts`, mirrored in `.env.example`)
 
 `ENVIRONMENT` (required), `REGION` (required: `us` or `eu`), `PORT`, `LOG_LEVEL`,
 `READINESS_TIMEOUT_MS`, `SHUTDOWN_TIMEOUT_MS`, `SHUTDOWN_GRACE_MS`, `MAX_REQUEST_BODY_BYTES`,
 `DATABASE_URL`, `AUTH_MASTER_KEY` (64 hex, never logged) and `PUBLIC_URL` (all three required
-outside `local`), `TOKEN_AUDIENCE` (default `closeline`). Add a key in both files.
+outside `local`), `TOKEN_AUDIENCE` (default `closeline`), `DB_POOL_MAX` (default 10),
+`RETENTION_INTERVAL_MS`, `RETENTION_BATCH_SIZE`, `RETENTION_RUN_TIMEOUT_MS`. Add a key in both files.
 
 ## Tests
 

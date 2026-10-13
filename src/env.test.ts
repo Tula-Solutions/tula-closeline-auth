@@ -12,6 +12,10 @@ test('configuration falls back to defaults for everything but the environment', 
     SHUTDOWN_TIMEOUT_MS: 10_000,
     SHUTDOWN_GRACE_MS: 5_000,
     MAX_REQUEST_BODY_BYTES: 1_048_576,
+    DB_POOL_MAX: 10,
+    RETENTION_INTERVAL_MS: 600_000,
+    RETENTION_BATCH_SIZE: 500,
+    RETENTION_RUN_TIMEOUT_MS: 30_000,
   })
 })
 
@@ -28,6 +32,11 @@ test.each([
   ['a negative shutdown grace', { SHUTDOWN_GRACE_MS: '-1' }],
   ['a zero body limit', { MAX_REQUEST_BODY_BYTES: '0' }],
   ['a body limit above 100 MB', { MAX_REQUEST_BODY_BYTES: '104857601' }],
+  ['an empty connection pool', { DB_POOL_MAX: '0' }],
+  ['a pool above 100 connections', { DB_POOL_MAX: '101' }],
+  ['a purge interval of zero', { RETENTION_INTERVAL_MS: '0' }],
+  ['a purge batch above 5000', { RETENTION_BATCH_SIZE: '5001' }],
+  ['a purge run timeout of zero', { RETENTION_RUN_TIMEOUT_MS: '0' }],
 ])('configuration rejects %s at boot', (_name, source) => {
   expect(() => loadEnv({ ENVIRONMENT: 'local', REGION: 'us', ...source })).toThrow()
 })

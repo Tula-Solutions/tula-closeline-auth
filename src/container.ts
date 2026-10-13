@@ -12,6 +12,7 @@ import { HibpBreachChecker } from '~/adapters/breach/hibp'
 import { MemoryLockout } from '~/adapters/memory/lockout'
 import { MemoryRateLimiter } from '~/adapters/memory/rate-limiter'
 import { createPlaceholderMembership } from '~/adapters/placeholder/membership'
+import { createPostgresExclusiveRunner } from '~/adapters/postgres/exclusive-runner'
 import { createPostgresFixedProject } from '~/adapters/postgres/fixed-project'
 import { PostgresFlowAttemptStore } from '~/adapters/postgres/flow-attempts'
 import { PostgresSessionStore } from '~/adapters/postgres/sessions'
@@ -26,6 +27,7 @@ import { SERVICE } from '~/info'
 import { createKeyedHash, type KeyedHash } from '~/lib/keyed-hash'
 import { createSecretBox, type SecretBox } from '~/lib/secret-box'
 import type { BreachChecker } from '~/ports/breach-checker'
+import type { ExclusiveRunner } from '~/ports/exclusive-runner'
 import type { FixedProject, Tenant } from '~/ports/fixed-project'
 import type { FlowAttemptStore } from '~/ports/flow-attempt-store'
 import type { IdGenerator } from '~/ports/id-generator'
@@ -101,6 +103,8 @@ export type Container = {
   rateLimiter: RateLimiter
   /** Backs off repeated wrong passwords per identifier (per process, as above). */
   lockout: Lockout
+  /** Lets work that must not run on two instances at once take turns (the purge). */
+  exclusive: ExclusiveRunner
   /** Whether a password appears in known breaches. */
   breachChecker: BreachChecker
   /** Releases what the container holds (database connections); call once on shutdown. */
@@ -138,6 +142,7 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
 
   // The pool connects on first use, so building a container needs no database.
   const database = createDb(databaseUrl(env), {
+    max: env.DB_POOL_MAX,
     onError: (error) => logger.error('database connection error', { error: describeError(error) }),
   })
   const tenant: Container['tenant'] = {}
@@ -179,6 +184,7 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     mailer: createUnconfiguredMailer(),
     rateLimiter: new MemoryRateLimiter(systemClock),
     lockout: new MemoryLockout(systemClock),
+    exclusive: createPostgresExclusiveRunner(database.db),
     breachChecker: new HibpBreachChecker({ logger }),
     close: database.close,
     reportError: (error, context) => {

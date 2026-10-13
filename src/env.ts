@@ -18,6 +18,17 @@ const schema = z
     SHUTDOWN_GRACE_MS: z.coerce.number().int().min(0).max(60_000).default(5_000),
     /** The largest request body accepted, in bytes; anything bigger is a 413. */
     MAX_REQUEST_BODY_BYTES: z.coerce.number().int().min(1).max(104_857_600).default(1_048_576),
+    /**
+     * The most database connections this instance opens. Every request that touches Postgres
+     * takes one, so the pool is sized to the traffic, not left at a default.
+     */
+    DB_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
+    /** How often expired sign-in attempts and verification codes are purged, in ms. */
+    RETENTION_INTERVAL_MS: z.coerce.number().int().min(100).max(86_400_000).default(600_000),
+    /** The most rows one purge statement removes; a run repeats while a batch comes back full. */
+    RETENTION_BATCH_SIZE: z.coerce.number().int().min(1).max(5_000).default(500),
+    /** The longest one purge run may take before it stops and waits for the next interval. */
+    RETENTION_RUN_TIMEOUT_MS: z.coerce.number().int().min(100).max(300_000).default(30_000),
     /** The Region this deployment serves (ADR 0001); stamped into every token. No default. */
     REGION: regionSchema,
     /** The `closeline_auth` login. Defaults to the local compose database in `local` only. */
