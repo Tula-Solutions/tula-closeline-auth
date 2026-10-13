@@ -25,3 +25,4 @@ message to Mailpit's send API (`POST /api/v1/send`: `From {Email}`, `To [{Email}
 - Nothing logs or throws an address, subject, code, link, body or the mailbox's answer: only an
   HTTP status, a failure kind and an attempt number. `mailer.test.ts` fails on any leak.
 - The adapter sends with `node:http`, never `fetch`: Bun's `fetch` obeys `HTTP_PROXY` and would hand the code and address to the proxy. A test sets every proxy variable and fails if the proxy sees a request.
+- The connection is pinned to loopback: a `lookup` refuses any address that is not in `127.0.0.0/8` or `::1`, so a hosts-file or resolver answer for `localhost` that points elsewhere fails the send (final, not retried) and the address is never repeated in an error or log.

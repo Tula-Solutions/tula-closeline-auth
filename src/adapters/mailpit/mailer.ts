@@ -1,4 +1,6 @@
+import { lookup as resolve } from 'node:dns'
 import { request } from 'node:http'
+import { isIPv4, type LookupFunction } from 'node:net'
 import type { Logger } from 'tula-closeline-kit'
 import type { Mailer, MailMessage } from '~/ports/mailer'
 
@@ -35,10 +37,44 @@ export type MailpitMailerOptions = {
   from: string
   /** Where a retry is noted. It receives a status or a failure kind and an attempt number only. */
   logger?: Pick<Logger, 'warn'>
+  /**
+   * Resolves the mailbox's host name; defaults to the system resolver. Every address it returns
+   * must be loopback or the send fails. Injected for tests.
+   */
+  lookup?: LookupFunction
   /** One attempt's bound; defaults to {@link MAIL_ATTEMPT_TIMEOUT_MS}. */
   timeoutMs?: number
   /** How long to pause before a retry; defaults to a jittered 50 to 150 ms. */
   retryDelayMs?: () => number
+}
+
+/** Whether `address` is in `127.0.0.0/8` or is `::1`. */
+function isLoopback(address: string): boolean {
+  return (isIPv4(address) && address.startsWith('127.')) || address === '::1'
+}
+
+/**
+ * Wraps a resolver so that any answer outside loopback is refused: a hosts-file or resolver answer
+ * for `localhost` that points elsewhere must not receive the message. `refused` is called when
+ * that happens, so the attempt can tell it from a network error and not retry it.
+ */
+function loopbackOnly(inner: LookupFunction, refused: () => void): LookupFunction {
+  return (hostname, options, callback) => {
+    inner(hostname, options, (error, address, family) => {
+      if (error) {
+        callback(error, address, family)
+        return
+      }
+      const addresses = Array.isArray(address) ? address.map((entry) => entry.address) : [address]
+      if (addresses.length === 0 || !addresses.every(isLoopback)) {
+        refused()
+        // Fixed text: the address that came back is not repeated.
+        callback(new Error('the host name did not resolve to a loopback address'), '', 4)
+        return
+      }
+      callback(null, address, family)
+    })
+  }
 }
 
 /**
@@ -47,12 +83,14 @@ export type MailpitMailerOptions = {
  * names the host, which would hand the verification code and the address to the proxy. `node:http`
  * connects to the host and port it is given. A redirect is never followed, and the body of the
  * answer is never read (it can echo the message): the connection is destroyed instead, which also
- * bounds it. `signal` covers connecting, sending and waiting for the answer.
+ * bounds it. `signal` covers connecting, sending and waiting for the answer. `lookup` pins the
+ * connection to a loopback address (a literal address is never looked up).
  */
 function post(
   target: { host: string; port: number; path: string },
   body: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  lookup: LookupFunction
 ): Promise<number> {
   return new Promise((resolve, reject) => {
     const outgoing = request(
@@ -67,6 +105,7 @@ function post(
           'content-length': Buffer.byteLength(body),
         },
         agent: false,
+        lookup,
         signal,
       },
       (response) => {
@@ -102,19 +141,32 @@ export function createMailpitMailer(options: MailpitMailerOptions): Mailer {
     port: origin.port === '' ? 80 : Number(origin.port),
     path: '/api/v1/send',
   }
+  const resolver = options.lookup ?? resolve
   const timeoutMs = options.timeoutMs ?? MAIL_ATTEMPT_TIMEOUT_MS
   const retryDelayMs = options.retryDelayMs ?? defaultRetryDelayMs
 
   /** One try at handing the message over. */
   const attempt = async (body: string): Promise<Outcome> => {
     const signal = AbortSignal.timeout(timeoutMs)
+    let outsideLoopback = false
     try {
-      const status = await post(target, body, signal)
+      const status = await post(
+        target,
+        body,
+        signal,
+        loopbackOnly(resolver, () => {
+          outsideLoopback = true
+        })
+      )
       if (status >= 200 && status < 300) {
         return { ok: true }
       }
       return { ok: false, reason: `HTTP ${status}`, retryable: status >= 500 }
     } catch (error) {
+      // Final: asking again would get the same answer from the same resolver.
+      if (outsideLoopback) {
+        return { ok: false, reason: 'host name not on loopback', retryable: false }
+      }
       if (signal.aborted) {
         return { ok: false, reason: 'timeout', retryable: true }
       }

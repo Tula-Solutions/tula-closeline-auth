@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test'
+import { createServer } from 'node:http'
 import type { MailMessage } from '~/ports/mailer'
 import { createMailpitMailer, type MailpitMailerOptions } from './mailer'
 
@@ -103,18 +104,9 @@ describe('the request', () => {
     })
   })
 
-  test('a base URL with a trailing slash reaches the same route', async () => {
+  test('a base URL with a trailing slash reaches exactly <origin>/api/v1/send', async () => {
     const mailpit = stand()
     const { mailer } = connect(mailpit, { baseUrl: `${mailpit.url}/` })
-
-    await mailer.send(MESSAGE)
-
-    expect(mailpit.seen[0]?.url).toBe(`${mailpit.url}/api/v1/send`)
-  })
-
-  test('the request goes to exactly <origin>/api/v1/send', async () => {
-    const mailpit = stand()
-    const { mailer } = connect(mailpit)
 
     await mailer.send(MESSAGE)
 
@@ -301,6 +293,171 @@ describe('proxy variables', () => {
           process.env[name] = value ?? ''
         }
       }
+    }
+  })
+})
+
+/** Whether this machine can listen on the IPv6 loopback address. */
+function hasIpv6Loopback(): boolean {
+  try {
+    Bun.serve({ hostname: '::1', port: 0, fetch: () => new Response() }).stop(true)
+    return true
+  } catch {
+    return false
+  }
+}
+
+describe('loopback addresses', () => {
+  test.skipIf(!hasIpv6Loopback())('a mailbox on [::1] takes the message', async () => {
+    const seen: string[] = []
+    const server = Bun.serve({
+      hostname: '::1',
+      port: 0,
+      fetch(request) {
+        seen.push(new URL(request.url).pathname)
+        return Response.json({ ID: 'v6' })
+      },
+    })
+    try {
+      const { mailer } = connect(stand(), { baseUrl: `http://[::1]:${server.port}` })
+
+      await mailer.send(MESSAGE)
+
+      expect(seen).toEqual(['/api/v1/send'])
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test('a name that resolves outside loopback fails the send, unretried, without connecting', async () => {
+    const mailbox = stand()
+    const port = new URL(mailbox.url).port
+    const asked: string[] = []
+    const { mailer, log } = connect(mailbox, {
+      baseUrl: `http://localhost:${port}`,
+      lookup: (hostname, _options, callback) => {
+        asked.push(hostname)
+        callback(null, '203.0.113.5', 4)
+      },
+    })
+
+    const error = await mailer.send(MESSAGE).then(
+      () => undefined,
+      (caught: unknown) => caught
+    )
+
+    expect(error).toBeInstanceOf(Error)
+    expect(asked).toEqual(['localhost'])
+    expect(mailbox.seen).toHaveLength(0)
+    expect(String((error as Error).message)).not.toContain('203.0.113.5')
+    expect(String((error as Error).message)).toContain('1 attempt')
+    expectNoLeak([...log.lines, String((error as Error).message)])
+    expect(log.lines.join('')).not.toContain('203.0.113.5')
+  })
+
+  test.each([
+    ['an IPv4 address outside 127.0.0.0/8', [{ address: '10.0.0.1', family: 4 }]],
+    ['an IPv6 address that is not ::1', [{ address: '2001:db8::1', family: 6 }]],
+    ['an IPv4-mapped address', [{ address: '::ffff:127.0.0.1', family: 6 }]],
+    [
+      'a list with one address outside loopback',
+      [
+        { address: '127.0.0.1', family: 4 },
+        { address: '203.0.113.5', family: 4 },
+      ],
+    ],
+    ['no address', []],
+  ])('a name that resolves to %s is refused', async (_name, addresses) => {
+    const mailbox = stand()
+    const { mailer } = connect(mailbox, {
+      baseUrl: `http://localhost:${new URL(mailbox.url).port}`,
+      lookup: (_hostname, _options, callback) => {
+        // Answers in the shape asked for: a list when `all` is set, else the first address.
+        const first = addresses[0]
+        if (_options.all) {
+          callback(null, addresses)
+        } else if (first) {
+          callback(null, first.address, first.family)
+        } else {
+          callback(new Error('no address'), '', 4)
+        }
+      },
+    })
+
+    await expect(mailer.send(MESSAGE)).rejects.toBeInstanceOf(Error)
+    expect(mailbox.seen).toHaveLength(0)
+  })
+
+  test('a name that resolves to 127.0.0.1 is used', async () => {
+    const mailbox = stand()
+    const { mailer } = connect(mailbox, {
+      baseUrl: `http://localhost:${new URL(mailbox.url).port}`,
+      lookup: (_hostname, options, callback) => {
+        if (options.all) {
+          callback(null, [{ address: '127.0.0.1', family: 4 }])
+        } else {
+          callback(null, '127.0.0.1', 4)
+        }
+      },
+    })
+
+    await mailer.send(MESSAGE)
+
+    expect(mailbox.seen).toHaveLength(1)
+  })
+
+  test('a literal address never consults the resolver', async () => {
+    const mailbox = stand()
+    let asked = 0
+    const { mailer } = connect(mailbox, {
+      lookup: (_hostname, _options, callback) => {
+        asked += 1
+        callback(null, '203.0.113.5', 4)
+      },
+    })
+
+    await mailer.send(MESSAGE)
+
+    expect(asked).toBe(0)
+    expect(mailbox.seen).toHaveLength(1)
+  })
+})
+
+describe('the connection after an answer', () => {
+  test('is closed once the send resolves on an answer that never ends', async () => {
+    let closed: () => void = () => {}
+    const socketClosed = new Promise<void>((resolve) => {
+      closed = resolve
+    })
+    const server = createServer((_request, response) => {
+      response.writeHead(200)
+      response.write('zed.leak@example.com 481516 ')
+    })
+    server.on('connection', (socket) => {
+      socket.on('close', closed)
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    try {
+      const address = server.address()
+      const port = typeof address === 'object' && address ? address.port : 0
+      const { mailer } = connect(stand(), {
+        baseUrl: `http://127.0.0.1:${port}`,
+        // Longer than the wait below, so only the adapter closing the socket can end it.
+        timeoutMs: 60_000,
+      })
+
+      await mailer.send(MESSAGE)
+
+      // Bounded wait for the server to see the close; no assertion on how long it took.
+      await Promise.race([
+        socketClosed,
+        Bun.sleep(5_000).then(() => {
+          throw new Error('the connection was left open after the answer')
+        }),
+      ])
+    } finally {
+      server.closeAllConnections()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
     }
   })
 })

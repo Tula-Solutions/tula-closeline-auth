@@ -141,7 +141,7 @@ const schema = z
         code: 'custom',
         path: ['MAIL_LOCAL_URL'],
         message:
-          'MAIL_LOCAL_URL must be an http address on 127.0.0.1, [::1] or localhost, with no credentials, path, query or fragment',
+          'MAIL_LOCAL_URL must be written exactly as http://127.0.0.1, http://[::1] or http://localhost, optionally followed by :port and one trailing slash',
       })
     }
     if (env.ENVIRONMENT === 'local') {

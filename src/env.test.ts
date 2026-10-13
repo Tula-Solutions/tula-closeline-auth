@@ -231,6 +231,8 @@ describe('the local mail settings', () => {
     ['a fragment', 'http://127.0.0.1:8025/#x'],
     ['no URL at all', 'not a url'],
     ['an empty value', ''],
+    ['the unspecified address', 'http://0.0.0.0'],
+    ['the unspecified address with a port', 'http://0.0.0.0:8025'],
     ['a short IPv4 form', 'http://127.1'],
     ['a decimal IPv4 form', 'http://2130706433'],
     ['a hexadecimal IPv4 form', 'http://0x7f.0.0.1'],
