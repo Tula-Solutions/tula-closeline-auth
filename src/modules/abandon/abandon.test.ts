@@ -372,7 +372,7 @@ describe('recording a sign-up', () => {
     void start
   })
 
-  test('a case that finds an Organization another case holds is given up and reported', async () => {
+  test('a learn conflict is reported by ids, and the sign-up whose account commits goes on and settles its own case', async () => {
     const { deps, start, verify, only } = await setup()
     const { started, code } = await start()
     spyOn(deps.abandonCases, 'learn').mockResolvedValue('conflict')
@@ -385,6 +385,73 @@ describe('recording a sign-up', () => {
     expect(
       deps.reported.some((entry) => String(entry.error).includes('another case already holds'))
     ).toBe(true)
+  })
+
+  test('after a learn conflict whose account does not commit, the case stays open and the sweep abandons it', async () => {
+    const { deps, tenant, start, verify, pastGrace, only } = await setup()
+    const { started, code } = await start()
+    const learn = spyOn(deps.abandonCases, 'learn').mockResolvedValue('conflict')
+    const create = deps.users.create.bind(deps.users)
+    deps.users.create = async () => {
+      throw new Error('connection reset')
+    }
+
+    expect((await verify(started, code)).status).toBe(500)
+    deps.users.create = create
+    learn.mockRestore()
+    expect(only().outcome).toBeNull()
+    expect(only().organizationId).toBeNull()
+    pastGrace()
+    // The sweep has no conflict of its own: it finds the Organization by the user id, learns it,
+    // sees no account, and asks core to abandon it.
+    const result = await sweepOnce(deps, tenant)
+
+    expect(result.abandoned).toBe(1)
+    expect(only().outcome).toBe('done')
+  })
+
+  test('if core returned an Organization another case holds, that case is refused by core and reported once; the Owner keeps the Organization', async () => {
+    const { deps, tenant, start, verify, pastGrace } = await setup()
+    const { started, code } = await start()
+    const otherUser = crypto.randomUUID()
+    const otherAttempt = crypto.randomUUID()
+    // Core is made to return an Organization that case Y (another user, no account) already holds.
+    const create = deps.membership.createOrganization.bind(deps.membership)
+    deps.membership.createOrganization = async (input) => {
+      const created = await create(input)
+      await deps.abandonCases.record({
+        id: otherAttempt,
+        projectId: tenant.projectId,
+        environmentId: tenant.environmentId,
+        organizationId: created.organizationId,
+        userId: otherUser,
+        attemptId: otherAttempt,
+        attemptExpiresAt: new Date(deps.clock.now().getTime() - 3_600_000),
+        graceMs: 30_000,
+      })
+      return created
+    }
+
+    const done = await verify(started, code)
+    expect(done.status).toBe(200)
+    const owner = deps.membership.organizations[0]?.owner as UserId
+    const first = await sweepOnce(deps, tenant)
+    deps.clock.advance('1h')
+    const second = await sweepOnce(deps, tenant)
+    pastGrace()
+
+    expect(first.refused).toBe(1)
+    expect(second.refused).toBe(0)
+    expect(deps.membership.abandons).toHaveLength(1)
+    expect(await deps.membership.forUser(owner)).toMatchObject({
+      role: 'owner',
+      organizationStatus: 'active',
+    })
+    const mine = deps.abandonCases.cases.find((one) => one.id === text(started.body, 'id'))
+    const theirs = deps.abandonCases.cases.find((one) => one.id === otherAttempt)
+    expect(mine?.outcome).toBe('not_needed')
+    expect(theirs?.outcome).toBe('refused')
+    expect(reconciles(deps)).toHaveLength(1)
   })
 })
 

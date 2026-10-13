@@ -135,7 +135,7 @@ describe('the abandon sweep against a real Postgres', () => {
 
     expect(done.status).toBe(200)
     const [only] = await cases()
-    expect(only?.outcome).toBe('done')
+    expect(only?.outcome).toBe('not_needed')
     expect(String(only?.core_organization_id)).toHaveLength(36)
   })
 

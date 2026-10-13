@@ -224,6 +224,16 @@ Core's own guard (sole member is the user, under 24 hours, not suspended) is a f
 add a path that writes an Owner's account without the settle. Tests that move the fixed clock
 must back-date rows in Postgres (the database clock decides): see `abandon.integration.ts`.
 
+**A learn conflict** (another case already holds the Organization id core returned for this
+attempt) can only arise if core returns an Organization already tied to a different user, a core
+fault. It is reported by ids at once and the case is left open. If this account commits, its own
+case is settled but the other case (Y) stays open, and Y's user has no account, so Y's sweep asks
+core to abandon an Organization that now has a live Owner. Nothing in auth prevents that call: the
+protection is **core's guard** (the abandon names Y's user, who is not that Organization's member,
+so core answers 409 and Y is resolved `refused` and reported once by ids). The memory fake applies
+the same user check, and `abandon.test.ts` pins it. If the account does not commit, the case stays
+open and the sweep finds the Organization by the user id and abandons it as usual.
+
 **Still open:** the in-request abandon of the narrow unique-violation case resolves its case
 (`done` or `refused`, `unfinished` stays open). An unexpected error inside the account transaction
 is only reported and left to the sweep, which abandons once the case is due and no account exists.
