@@ -990,10 +990,16 @@ describe('an Organization that core made and nobody owns', () => {
     const email = nextEmail()
     const started = await signUp(email)
     const code = emailedCode(deps, email)
-    // Request B is held between its call to core and its insert, until request A has finished.
+    // The request that reaches core second is held between its call to core and its insert, until
+    // the other has finished. Which of the two submits that is depends on scheduling, so the test
+    // follows the held one by the order they reached core, not by the order they were sent.
     let release: () => void = () => {}
     const gate = new Promise<void>((resolve) => {
       release = resolve
+    })
+    let reachedSecond: () => void = () => {}
+    const bothInCore = new Promise<void>((resolve) => {
+      reachedSecond = resolve
     })
     let coreCalls = 0
     const createOrganization = deps.membership.createOrganization.bind(deps.membership)
@@ -1002,11 +1008,13 @@ describe('an Organization that core made and nobody owns', () => {
       const mine = coreCalls
       const created = await createOrganization(input)
       if (mine === 2) {
+        reachedSecond()
         await gate
       }
       return created
     }
-    // The first insert to be attempted (A's) throws; the held one (B's) is the second.
+    // The first insert to be attempted throws. Only the request that was not held can attempt
+    // one before the release, so it is that request's.
     let inserts = 0
     const create = deps.users.create.bind(deps.users)
     deps.users.create = async (input) => {
@@ -1017,17 +1025,17 @@ describe('an Organization that core made and nobody owns', () => {
       return create(input)
     }
 
-    const first = verify(started, code)
-    const second = verify(started, code)
-    while (coreCalls < 2) {
-      await Bun.sleep(1)
-    }
-    const a = await first
+    const submits = [verify(started, code), verify(started, code)].map((request, index) =>
+      request.then((reply) => ({ index, reply }))
+    )
+    await bothInCore
+    // The held request cannot finish before the release, so the first to settle is the other.
+    const unheld = await Promise.race(submits)
     release()
-    const b = await second
+    const held = await submits[1 - unheld.index]
 
-    expect(a.status).toBe(500)
-    expect(b.status).toBe(200)
+    expect(unheld.reply.status).toBe(500)
+    expect(held?.reply.status).toBe(200)
     expect(deps.membership.calls.abandon).toBe(0)
     const user = await deps.users.findByEmail(deps.tenant.current?.environmentId ?? '', email)
     expect(user).not.toBeNull()

@@ -259,6 +259,21 @@ const schema = z
         ctx.addIssue({ code: 'custom', path: [key], message: `${key} is required outside local` })
       }
     }
+    // The published development keys protect nothing: a deployment must not run on them. The
+    // messages name the setting only, never the value.
+    for (const [key, published] of [
+      ['AUTH_MASTER_KEY', LOCAL_MASTER_KEY],
+      ['COUNTER_HASH_KEY', LOCAL_COUNTER_HASH_KEY],
+      ['DEVICE_COOKIE_KEY', LOCAL_DEVICE_COOKIE_KEY],
+    ] as const) {
+      if (env[key]?.toLowerCase() === published) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [key],
+          message: `${key} must not be the published development key outside local`,
+        })
+      }
+    }
     if (env.COUNTER_HASH_KEY !== undefined && env.COUNTER_HASH_KEY === env.DEVICE_COOKIE_KEY) {
       ctx.addIssue({
         code: 'custom',

@@ -67,6 +67,14 @@ In `local` fixed development keys are used (`LOCAL_COUNTER_HASH_KEY`, `LOCAL_DEV
   cannot make a known-device success, and clearing would give guessers a fresh budget each time the
   owner signs in).
 
+## Known-device cookies cannot be revoked (owed by the password tickets)
+
+A cookie is valid until it expires (90 days, renewed on each successful sign-in of that device) or
+`DEVICE_COOKIE_KEY` is rotated, which ends every device's. Nothing ends one device or one user's.
+So **before the password-change and password-reset tickets ship**, they must add a per-user epoch
+to the signed fields (or otherwise end existing known devices) and owe this test: after a password
+change the old cookie is treated as no cookie while the address is locked (429, not a sign-in).
+
 ## Cost
 
 Sign-in password step, added database round trips (it counted in memory before): 1 for the address

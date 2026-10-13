@@ -563,3 +563,43 @@ describe('the counter hash key and the known-device cookie key', () => {
     expect(() => loadEnv({ ...withoutKeys })).toThrow()
   })
 })
+
+describe('the published development keys', () => {
+  const deployed = {
+    ...DEPLOYED,
+    COUNTER_HASH_KEY: 'h'.repeat(40),
+    DEVICE_COOKIE_KEY: 'd'.repeat(40),
+  }
+
+  test.each([
+    ['AUTH_MASTER_KEY', LOCAL_MASTER_KEY],
+    ['AUTH_MASTER_KEY', LOCAL_MASTER_KEY.toUpperCase()],
+    ['COUNTER_HASH_KEY', LOCAL_COUNTER_HASH_KEY],
+    ['DEVICE_COOKIE_KEY', LOCAL_DEVICE_COOKIE_KEY],
+  ])(
+    '%s equal to its local default fails to load in prod, naming the setting only',
+    (key, value) => {
+      let message = ''
+      try {
+        loadEnv({ ...deployed, [key]: value })
+      } catch (error) {
+        message = String(error)
+      }
+
+      expect(message).toContain(`${key} must not be the published development key`)
+      expect(message).not.toContain(value)
+    }
+  )
+
+  test('the same values are accepted in local', () => {
+    expect(() =>
+      loadEnv({
+        ENVIRONMENT: 'local',
+        REGION: 'us',
+        AUTH_MASTER_KEY: LOCAL_MASTER_KEY,
+        COUNTER_HASH_KEY: LOCAL_COUNTER_HASH_KEY,
+        DEVICE_COOKIE_KEY: LOCAL_DEVICE_COOKIE_KEY,
+      })
+    ).not.toThrow()
+  })
+})
