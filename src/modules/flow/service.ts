@@ -252,17 +252,20 @@ export async function resendCode(
   return present(attempt, state)
 }
 
-/** Runs bookkeeping that follows a committed account: a failure is logged (ids only), not raised. */
+/**
+ * Runs bookkeeping whose failure must not change the answer: a failure is logged (ids only), not
+ * raised. `failure` is the whole log message, so it says what failed on that path.
+ */
 async function bestEffort(
   deps: Pick<Container, 'logger'>,
-  what: string,
+  failure: string,
   attemptId: string,
   work: () => Promise<void>
 ): Promise<void> {
   try {
     await work()
   } catch (error) {
-    deps.logger.warn(`${what} failed after the account was committed`, {
+    deps.logger.warn(failure, {
       attemptId,
       error: describeError(error),
     })
@@ -405,8 +408,11 @@ export async function verifyEmail(
   } catch (error) {
     if (error instanceof MembershipOutage) {
       // The code matched and core could not be asked: that try is not the person's to lose.
-      await bestEffort(deps, 'giving back the try', attempt.id, () =>
-        Verification.refundAttempt(deps, tenant, tokenId)
+      await bestEffort(
+        deps,
+        'giving back the verification try failed after core was unavailable',
+        attempt.id,
+        () => Verification.refundAttempt(deps, tenant, tokenId)
       )
     } else if (error instanceof MembershipFaulted) {
       // A fault that retrying cannot clear: the try stays spent, so the code runs out.
@@ -452,23 +458,33 @@ export async function verifyEmail(
     throw error
   }
   let spent: boolean | undefined
-  await bestEffort(deps, 'spending the code', attempt.id, async () => {
-    spent = await deps.verificationTokens.consume(tenant.environmentId, tokenId, now)
-  })
+  await bestEffort(
+    deps,
+    'spending the code failed after the account was committed',
+    attempt.id,
+    async () => {
+      spent = await deps.verificationTokens.consume(tenant.environmentId, tokenId, now)
+    }
+  )
   if (spent === false) {
     // The code is single-use: another request with it got here first and is finishing the
     // sign-up (same account, so nothing is lost), or the code ran out as this request finished.
     throw fail(AUTH_ERRORS['flow.invalid_step'])
   }
-  await bestEffort(deps, 'closing the attempt', attempt.id, async () => {
-    await deps.flowAttempts.transition(
-      tenant.environmentId,
-      attempt.id,
-      attempt.status,
-      { status: 'complete', userId, state: { client: state.client }, completedAt: now },
-      now
-    )
-  })
+  await bestEffort(
+    deps,
+    'closing the attempt failed after the account was committed',
+    attempt.id,
+    async () => {
+      await deps.flowAttempts.transition(
+        tenant.environmentId,
+        attempt.id,
+        attempt.status,
+        { status: 'complete', userId, state: { client: state.client }, completedAt: now },
+        now
+      )
+    }
+  )
   const session = await Sessions.create(deps, tenant, {
     userId,
     client: context.client,

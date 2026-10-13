@@ -145,6 +145,27 @@ describe('sign-up', () => {
     expect(deps.membership.organizations).toHaveLength(1)
   })
 
+  test('a refund that fails during an outage is logged as what it is, and the 503 still goes out', async () => {
+    const { deps, signUp, verify, nextEmail } = await setup()
+    const email = nextEmail()
+    const started = await signUp(email)
+    const code = emailedCode(deps, email)
+    deps.membership.breakDown(true)
+    deps.verificationTokens.refundAttempt = async () => {
+      throw new Error('connection reset')
+    }
+
+    const failed = await verify(started, code)
+
+    expect(failed.status).toBe(503)
+    expect(failed.body).toMatchObject({ error: { code: 'membership.unavailable' } })
+    const logged = deps.logLines.filter((line) => line.includes('giving back the verification try'))
+    expect(logged).toHaveLength(1)
+    expect(logged[0]).toContain('giving back the verification try failed')
+    expect(deps.logLines.join('\n')).not.toContain('committed')
+    expect(deps.logLines.join('\n')).not.toContain(email)
+  })
+
   test('a retry after a lost response reuses the same Organization', async () => {
     const { deps, signUp, verify, nextEmail } = await setup()
     const email = nextEmail()

@@ -79,8 +79,8 @@ session), none `auth.no_organization` (403, reported). Core slow or down: sign-i
 refresh and sign-up answer 503 `membership.unavailable` (`Retry-After: 5`), issuing, counting,
 rotating and spending nothing: retry the same attempt, code or token (a sign-up gives back the
 verification try the code cost, so outages never use up a correct code). An outage is logged at
-warn per request, not reported; a rejected secret is reported once a minute per cause class
-(`src/http/errors.ts`). Core saying a new user already belongs to an Organization is a fault: 500,
+warn, one line per failed request, and not reported; a rejected secret is reported once a minute
+per cause class (`src/http/errors.ts`). Core saying a new user already belongs to an Organization is a fault: 500,
 no `Retry-After`, reported once per attempt, the try stays spent. Calls to core are capped
 (`CORE_CONCURRENCY`, `CORE_QUEUE`); past the cap a call is 503 at once.
 
@@ -176,7 +176,8 @@ The per-request middleware stack (`createBaseApp`), `/healthz`, and session refr
 sessions, Organizations and signing keys: one token lookup by hash, one user lookup by id, one
 active-key read (`SigningKeyStore.active`, one row however many keys were retired), one
 membership read to core (the token hook: one HTTP call, retried at most once, 4.15 s worst case,
-asked once per request even if the rotation is retried; a replayed or expired token costs none),
+asked once per request even if the rotation is retried; a replay inside the grace window asks
+too, only a token spent beyond grace and an expired token cost no call),
 one signature, one rotation. The membership lookup through the HTTP adapter is a hot path too
 (`bench/membership.bench.test.ts`: best batch about 53 ms per 500 lookups, budget 270 ms). The
 JWKS and bearer routes read at most 20 keys, bounded in SQL by retirement time and a limit.

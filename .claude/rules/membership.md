@@ -23,9 +23,10 @@ The runtime adapter is `src/adapters/http/membership.ts`, over HTTP to core's in
 `Authorization: Bearer <CORE_INTERNAL_TOKEN>` and an `Idempotency-Key`. Every answer is parsed with the contract's
 schema; one that does not parse is core being unavailable. Redirects are never followed, and the
 secret, an invitation token, an address or a body of core never reach a log or an error message
-(tests pin it). Accepting an invitation is not built in core yet, so that call fails (unavailable)
-against a real core until it is. `local` with neither core setting runs on the placeholder
-adapter (boots alone, nobody can sign up); outside `local` both settings are required and the
+(tests pin it). Core's accept route is on its `develop` (checked against
+`src/modules/internal/router.ts` and `service.ts` there): a retry by the same user and address
+answers 200 as the first call did, whatever the key. `local` with neither core setting runs on
+the placeholder adapter (boots alone, nobody can sign up); outside `local` both settings are required and the
 container refuses to build without them, so the placeholder cannot serve a deployment.
 
 How core's answers map: `found: false` is no membership (`auth.no_organization`, reported);
@@ -35,7 +36,7 @@ without a call; 401 or 403 (a wrong shared secret, a deployment fault) is unavai
 reported with the class `CoreCredentialsRejected` (see below for how often); `membership.already_member`
 (from a create or an accept) is a `MembershipFault`, not an outage: auth makes a fresh user id per
 attempt, so it means a fault on one side that retrying cannot clear. A lookup is never allowed that
-code. A 404 from the accept route stays unavailable (503) until core ships it. Anything else, a
+code. Anything else, a
 timeout, a 5xx or a body that does not parse is unavailable.
 
 Status at token issuance (decided in `modules/membership/service.ts`, `Membership.of`):
@@ -77,10 +78,15 @@ under the same key). The caller gives up on any call at 5 s and aborts its signa
 
 `Sessions.refresh` decides everything that needs no answer from core first (an ended session, a
 banned user, a token spent beyond the grace window or without a usable next token, an expired
-token), so a replayed or expired token costs no call and an outage cannot defer reuse detection.
-Core is then asked at most once per request: if the rotation loses a race and runs again, the
-answer is reused. The clock is read again after the answer, for the access token's issue time and
-the rotation time that starts the grace window.
+token), so a token spent beyond grace and an expired token cost no call and an outage cannot
+defer reuse detection. A replay inside the grace window does ask core: it is handed the same next
+token with a fresh access token. Core is asked at most once per request: if the rotation loses a
+race and runs again, the answer is reused. The clock is read again after the answer, for the
+access token's issue time and the rotation time that starts the grace window. Because core may
+take seconds, what was decided before the call is decided again after it: a replay re-reads the
+session, user and next token (ended, revoked, banned or expired, or the next token already
+spent, is refused as the rotation path would), and a rotation refuses with `session.expired`
+when the session's or the token's expiry has passed by the new time.
 
 ## Calls to core are capped
 
