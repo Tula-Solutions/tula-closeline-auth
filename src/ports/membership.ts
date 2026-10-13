@@ -64,6 +64,9 @@ export interface MembershipClaims {
   /**
    * Create an Organization for a user who is signing up; the user becomes its Owner.
    *
+   * @param input.email - The verified address the account is created with (sent to core, which
+   *   keeps a copy for the member list, ADR 0015).
+   * @param input.memberName - The person's name for the member list, or `null` when they gave none.
    * @param input.idempotencyKey - Fixed per sign-up attempt: the same key returns the same result.
    * @param input.signal - Aborts when the caller has stopped waiting (the 5 second bound), so an
    *   adapter cancels the request instead of leaving it running; an aborted call is
@@ -74,6 +77,8 @@ export interface MembershipClaims {
   createOrganization(input: {
     userId: UserId
     name: string
+    email: string
+    memberName: string | null
     idempotencyKey: string
     signal?: AbortSignal
   }): Promise<Membership>
@@ -82,6 +87,7 @@ export interface MembershipClaims {
    * Add a user who is signing up to the Organization that invited them.
    *
    * @param input.email - The verified address the invitation must have been sent to.
+   * @param input.memberName - The person's name for the member list, or `null`.
    * @param input.signal - As for {@link MembershipClaims.createOrganization}.
    * @throws MembershipRefused `invitation_invalid`; MembershipFault as for
    *   {@link MembershipClaims.createOrganization}; MembershipUnavailable on any other failure.
@@ -90,6 +96,7 @@ export interface MembershipClaims {
     userId: UserId
     invitationToken: string
     email: string
+    memberName: string | null
     idempotencyKey: string
     signal?: AbortSignal
   }): Promise<Membership>

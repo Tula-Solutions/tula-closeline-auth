@@ -326,13 +326,22 @@ export function createHttpMembership(options: HttpMembershipOptions): Membership
   }
 
   return {
-    async createOrganization({ userId, name, idempotencyKey, signal }): Promise<Membership> {
+    async createOrganization({
+      userId,
+      name,
+      email,
+      memberName,
+      idempotencyKey,
+      signal,
+    }): Promise<Membership> {
       if (!organizationNameSchema.safeParse(name).success) {
         throw new MembershipRefused('organization_name_invalid')
       }
       const request = internalCreateOrganizationRequestSchema.safeParse({
         userId,
         organizationName: name,
+        email,
+        name: memberName,
       })
       if (!request.success) {
         throw new MembershipUnavailable('the request is not one the contract describes')
@@ -353,6 +362,7 @@ export function createHttpMembership(options: HttpMembershipOptions): Membership
       userId,
       invitationToken,
       email,
+      memberName,
       idempotencyKey,
       signal,
     }): Promise<Membership> {
@@ -366,6 +376,7 @@ export function createHttpMembership(options: HttpMembershipOptions): Membership
       const request = internalAcceptInvitationRequestSchema.safeParse({
         userId,
         email,
+        name: memberName,
         invitationToken,
       })
       if (!request.success) {

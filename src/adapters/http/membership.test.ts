@@ -40,11 +40,13 @@ const INVITE_TOKEN = `inv-${'z'.repeat(30)}`
 
 /** The three calls, each as a function of an adapter, for tests that treat them alike. */
 const CALLS: Record<
-  InternalCallName,
+  Exclude<InternalCallName, 'updateMemberProfile' | 'abandonOrganization'>,
   (adapter: ReturnType<typeof connect>['adapter'], signal?: AbortSignal) => Promise<unknown>
 > = {
   createOrganization: (adapter, signal) =>
     adapter.createOrganization({
+      email: 'maya@northline.app',
+      memberName: null,
       userId: user(),
       name: 'Northline',
       idempotencyKey: key(),
@@ -52,6 +54,7 @@ const CALLS: Record<
     }),
   acceptInvitation: (adapter, signal) =>
     adapter.acceptInvitation({
+      memberName: null,
       userId: user(),
       invitationToken: INVITE_TOKEN,
       email: 'rep@example.com',
@@ -60,7 +63,7 @@ const CALLS: Record<
     }),
   membership: (adapter, signal) => adapter.forUser(user(), signal),
 }
-const CALL_NAMES = Object.keys(CALLS) as InternalCallName[]
+const CALL_NAMES = Object.keys(CALLS) as (keyof typeof CALLS)[]
 
 const json = (status: number, body: unknown): Reply => ({ kind: 'json', status, body })
 const failure = (code: CoreErrorCode): Reply =>
@@ -84,7 +87,13 @@ describe('what is sent to core', () => {
     const userId = user()
     const idempotencyKey = `signup:${crypto.randomUUID()}`
 
-    await adapter.createOrganization({ userId, name: '  Northline  ', idempotencyKey })
+    await adapter.createOrganization({
+      email: 'maya@northline.app',
+      memberName: null,
+      userId,
+      name: '  Northline  ',
+      idempotencyKey,
+    })
 
     const [request] = core.requests
     expect(request?.method).toBe('POST')
@@ -92,7 +101,12 @@ describe('what is sent to core', () => {
     expect(request?.headers.authorization).toBe(`Bearer ${core.secret}`)
     expect(request?.headers['idempotency-key']).toBe(idempotencyKey)
     expect(request?.headers['content-type']).toBe('application/json')
-    expect(request?.body).toEqual({ userId, organizationName: 'Northline' })
+    expect(request?.body).toEqual({
+      userId,
+      organizationName: 'Northline',
+      email: 'maya@northline.app',
+      name: null,
+    })
     expect(Object.keys(request?.headers ?? {})).not.toContain('cookie')
   })
 
@@ -103,6 +117,7 @@ describe('what is sent to core', () => {
     const idempotencyKey = key()
 
     await adapter.acceptInvitation({
+      memberName: null,
       userId,
       invitationToken: INVITE_TOKEN,
       email: 'Rep@Example.com',
@@ -116,6 +131,7 @@ describe('what is sent to core', () => {
     expect(request?.body).toEqual({
       userId,
       email: 'rep@example.com',
+      name: null,
       invitationToken: INVITE_TOKEN,
     })
   })
@@ -145,10 +161,17 @@ describe('what is sent to core', () => {
     const { core, adapter } = connect()
 
     await expect(
-      adapter.createOrganization({ userId: user(), name: '   ', idempotencyKey: key() })
+      adapter.createOrganization({
+        email: 'maya@northline.app',
+        memberName: null,
+        userId: user(),
+        name: '   ',
+        idempotencyKey: key(),
+      })
     ).rejects.toMatchObject({ reason: 'organization_name_invalid' })
     await expect(
       adapter.acceptInvitation({
+        memberName: null,
         userId: user(),
         invitationToken: 'short',
         email: 'a@example.com',
@@ -156,7 +179,13 @@ describe('what is sent to core', () => {
       })
     ).rejects.toMatchObject({ reason: 'invitation_invalid' })
     await expect(
-      adapter.createOrganization({ userId: user(), name: 'A', idempotencyKey: 'too short' })
+      adapter.createOrganization({
+        email: 'maya@northline.app',
+        memberName: null,
+        userId: user(),
+        name: 'A',
+        idempotencyKey: 'too short',
+      })
     ).rejects.toBeInstanceOf(MembershipUnavailable)
 
     expect(core.requests).toHaveLength(0)
@@ -167,7 +196,13 @@ describe('retries', () => {
   test('a lookup that gets a 5xx is tried once more and then succeeds', async () => {
     const { core, adapter } = connect()
     const userId = user()
-    await adapter.createOrganization({ userId, name: 'A', idempotencyKey: key() })
+    await adapter.createOrganization({
+      email: 'maya@northline.app',
+      memberName: null,
+      userId,
+      name: 'A',
+      idempotencyKey: key(),
+    })
     core.requests.length = 0
     core.script(json(503, { error: { code: 'server.unavailable', message: 'busy' } }))
 
@@ -467,7 +502,10 @@ describe('what core can answer', () => {
       expect(error).toMatchObject({ reason: 'invitation_invalid' })
     } else if (CORE_ERRORS[code].status === 403) {
       expect(error).toBeInstanceOf(CoreCredentialsRejected)
-    } else if (code === 'membership.already_member' && name !== 'membership') {
+    } else if (
+      code === 'membership.already_member' &&
+      (name === 'createOrganization' || name === 'acceptInvitation')
+    ) {
       // Auth makes a fresh user id for every sign-up, so this is a fault, not an outage. (A lookup
       // is never allowed to get it, so there it is just an answer that is not believed.)
       expect(error).toBeInstanceOf(MembershipFault)
@@ -523,6 +561,8 @@ describe('what core can answer', () => {
     const { core, adapter } = connect()
     const userId = user()
     const { organizationId } = await adapter.createOrganization({
+      email: 'maya@northline.app',
+      memberName: null,
       userId,
       name: 'A',
       idempotencyKey: key(),
@@ -569,6 +609,7 @@ describe('what never leaves the adapter', () => {
       core.script(echo(status))
       await attempt(
         adapter.acceptInvitation({
+          memberName: null,
           userId: user(),
           invitationToken: INVITE_TOKEN,
           email: address,
@@ -591,6 +632,7 @@ describe('what never leaves the adapter', () => {
         retryDelayMs: () => 0,
         logger: { warn: (message, fields) => void lines.push(JSON.stringify({ message, fields })) },
       }).acceptInvitation({
+        memberName: null,
         userId: user(),
         invitationToken: INVITE_TOKEN,
         email: address,
@@ -626,5 +668,63 @@ describe('what never leaves the adapter', () => {
 
     expect(JSON.stringify(adapter)).not.toContain(core.secret)
     expect(Object.values(adapter).join()).not.toContain(core.secret)
+  })
+})
+
+describe('what the sign-up calls carry about the person (ADR 0015)', () => {
+  test('a create call sends the address and the name, and a null name when there is none', async () => {
+    const { core, adapter } = connect()
+    const userId = user()
+
+    await adapter.createOrganization({
+      userId,
+      name: 'Northline',
+      email: 'maya@northline.app',
+      memberName: 'Maya Rao',
+      idempotencyKey: key(),
+    })
+    await adapter.createOrganization({
+      userId: user(),
+      name: 'Northline',
+      email: 'sam@northline.app',
+      memberName: null,
+      idempotencyKey: key(),
+    })
+
+    expect(core.requests.map((r) => r.body)).toEqual([
+      { userId, organizationName: 'Northline', email: 'maya@northline.app', name: 'Maya Rao' },
+      expect.objectContaining({ email: 'sam@northline.app', name: null }),
+    ])
+  })
+
+  test('a create call whose address the contract refuses is not sent', async () => {
+    const { core, adapter } = connect()
+
+    await expect(
+      adapter.createOrganization({
+        userId: user(),
+        name: 'Northline',
+        email: 'not an address',
+        memberName: null,
+        idempotencyKey: key(),
+      })
+    ).rejects.toBeInstanceOf(MembershipUnavailable)
+
+    expect(core.requests).toHaveLength(0)
+  })
+
+  test('an accept call sends the name beside the address', async () => {
+    const { core, adapter } = connect()
+    core.invite(INVITE_TOKEN, { email: 'rep@example.com' })
+
+    await adapter.acceptInvitation({
+      userId: user(),
+      invitationToken: INVITE_TOKEN,
+      email: 'rep@example.com',
+      memberName: 'Rae Pell',
+      idempotencyKey: key(),
+    })
+
+    expect(core.requests[0]?.body).toMatchObject({ name: 'Rae Pell', email: 'rep@example.com' })
   })
 })

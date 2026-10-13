@@ -7,6 +7,7 @@ import { fail, MembershipFaulted, MembershipOutage, rateLimited } from '~/errors
 import { randomToken, sha256Hex, timingSafeEqual } from '~/lib/crypto'
 import { durationToMs } from '~/lib/duration'
 import { maskEmail, normalizeEmail, parseEmail } from '~/lib/email'
+import { composeMemberName } from '~/modules/membership/profile'
 import * as Membership from '~/modules/membership/service'
 import * as Passwords from '~/modules/password/service'
 import * as Sessions from '~/modules/session/service'
@@ -388,14 +389,23 @@ export async function verifyEmail(
   const sign = await Tokens.signer(deps, tenant)
   const now = deps.clock.now()
   const userId = state.userId
+  // Core keeps a copy of the verified address (as normalized, the form its checks fold to) and
+  // the person's name for the member list (ADR 0015).
+  const memberName = composeMemberName(state.firstName, state.lastName)
   const join: Membership.JoinRequest = state.organizationName
-    ? { kind: 'create', name: state.organizationName }
+    ? {
+        kind: 'create',
+        name: state.organizationName,
+        email: attempt.identifier,
+        memberName,
+      }
     : {
         kind: 'invitation',
         token: new TextDecoder().decode(
           await deps.secretBox.open(SEAL_PURPOSE, state.sealedInvitation ?? '', attempt.id)
         ),
         email: attempt.identifier,
+        memberName,
       }
 
   // Most taken addresses are caught here, before core is asked for an Organization nobody owns.

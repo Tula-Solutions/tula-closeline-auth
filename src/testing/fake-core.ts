@@ -151,7 +151,8 @@ export function startFakeCore(secret = 'fake-core-secret-0123456789abcdef-0123')
 
     if (path === '/internal/organizations') {
       const parsed = internalCreateOrganizationRequestSchema.safeParse(body)
-      if (!parsed.success) {
+      // Like core: the contract leaves `email` optional, but a Membership cannot exist without one.
+      if (!parsed.success || parsed.data.email === undefined) {
         return coreError('request.invalid')
       }
       const existing = members.get(parsed.data.userId)

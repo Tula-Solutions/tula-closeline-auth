@@ -176,6 +176,8 @@ describe('sign-up', () => {
       text(started.body, 'id')
     )
     await deps.membership.createOrganization({
+      email: 'maya@northline.app',
+      memberName: null,
       userId: formatId('usr', String(attempt?.state.userId)) as UserId,
       name: 'Northline',
       idempotencyKey: `signup:${text(started.body, 'id')}`,
@@ -1269,5 +1271,94 @@ describe('what the per-process counters allow while they are full', () => {
 
     expect(reply.status).toBe(429)
     expect(reply.body).toMatchObject({ error: { code: 'verification.too_many_attempts' } })
+  })
+})
+
+describe('what core is told about the person (ADR 0015)', () => {
+  const FIRST_AT_LIMIT = 'f'.repeat(100)
+  const LAST_AT_LIMIT = 'l'.repeat(100)
+
+  test.each([
+    ['both names', { firstName: 'Maya', lastName: 'Rao' }, 'Maya Rao'],
+    ['first only', { firstName: 'Maya' }, 'Maya'],
+    ['last only', { lastName: 'Rao' }, 'Rao'],
+    ['neither', {}, null],
+    ['empty strings', { firstName: '', lastName: '' }, null],
+    ['padded', { firstName: '  Maya  ', lastName: ' Rao ' }, 'Maya Rao'],
+    [
+      'both at the length limit',
+      { firstName: FIRST_AT_LIMIT, lastName: LAST_AT_LIMIT },
+      `${FIRST_AT_LIMIT} ${LAST_AT_LIMIT}`,
+    ],
+    ['a control character inside', { firstName: 'Ma\u0007ya', lastName: 'Rao' }, 'Ma ya Rao'],
+  ])(
+    'an Owner sign-up with %s sends the verified address and that name',
+    async (_label, names, expected) => {
+      const { deps, signUp, verify, nextEmail } = await setup()
+      const email = nextEmail()
+      const started = await signUp(email, { organizationName: 'Northline', ...names })
+
+      const done = await verify(started, emailedCode(deps, email))
+
+      expect(done.status).toBe(200)
+      expect(deps.membership.profiles).toEqual([
+        { userId: expect.stringMatching(/^usr_/), email, name: expected },
+      ])
+    }
+  )
+
+  test('the address sent is the verified one in the folded form, whatever case it was typed in', async () => {
+    const { deps, signUp, verify } = await setup()
+    const started = await signUp('  Maya.Rao@Northline.APP ', { organizationName: 'Northline' })
+
+    const done = await verify(started, emailedCode(deps, 'maya.rao@northline.app'))
+
+    expect(done.status).toBe(200)
+    expect(deps.membership.profiles.map((p) => p.email)).toEqual(['maya.rao@northline.app'])
+  })
+
+  test.each([
+    ['both names', { firstName: 'Rae', lastName: 'Pell' }, 'Rae Pell'],
+    ['neither', {}, null],
+    ['last only', { lastName: ' Pell ' }, 'Pell'],
+  ])(
+    'an invitation sign-up with %s sends the address and that name',
+    async (_label, names, expected) => {
+      const { deps, signUp, verify, nextEmail } = await setup()
+      const email = nextEmail()
+      deps.membership.invite('inv-1', {
+        email,
+        organizationId: `org_${'a'.repeat(32)}`,
+        role: 'rep',
+      })
+      const started = await signUp(email, { invitationToken: 'inv-1', ...names })
+
+      const done = await verify(started, emailedCode(deps, email))
+
+      expect(done.status).toBe(200)
+      expect(deps.membership.profiles).toEqual([
+        { userId: expect.stringMatching(/^usr_/), email, name: expected },
+      ])
+    }
+  )
+
+  test('the name is never written to a log line or a report', async () => {
+    const { deps, signUp, verify, nextEmail } = await setup()
+    const email = nextEmail()
+    const started = await signUp(email, {
+      organizationName: 'Northline',
+      firstName: 'Zebulon',
+      lastName: 'Quillfeather',
+    })
+    deps.users.create = async () => {
+      throw new Error('connection reset')
+    }
+
+    await verify(started, emailedCode(deps, email))
+
+    const everything = JSON.stringify([deps.logLines, deps.reported.map((r) => String(r.error))])
+    expect(everything).not.toContain('Zebulon')
+    expect(everything).not.toContain('Quillfeather')
+    expect(everything).not.toContain(email)
   })
 })

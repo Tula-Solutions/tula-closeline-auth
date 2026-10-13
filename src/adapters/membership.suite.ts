@@ -24,11 +24,15 @@ export function membershipSuite(name: string, make: () => MembershipHarness): vo
       const key = crypto.randomUUID()
 
       const first = await adapter.createOrganization({
+        email: 'maya@northline.app',
+        memberName: null,
         userId,
         name: 'Northline',
         idempotencyKey: key,
       })
       const second = await adapter.createOrganization({
+        email: 'maya@northline.app',
+        memberName: null,
         userId,
         name: 'Northline',
         idempotencyKey: key,
@@ -49,6 +53,7 @@ export function membershipSuite(name: string, make: () => MembershipHarness): vo
       const userId = user()
 
       const wrongAddress = harness.adapter.acceptInvitation({
+        memberName: null,
         userId,
         invitationToken: token('inv-1'),
         email: 'other@example.com',
@@ -56,6 +61,7 @@ export function membershipSuite(name: string, make: () => MembershipHarness): vo
       })
       await expect(wrongAddress).rejects.toBeInstanceOf(MembershipRefused)
       const joined = await harness.adapter.acceptInvitation({
+        memberName: null,
         userId,
         invitationToken: token('inv-1'),
         email: 'rep@example.com',
@@ -64,6 +70,7 @@ export function membershipSuite(name: string, make: () => MembershipHarness): vo
 
       expect(await harness.adapter.forUser(userId)).toMatchObject(joined)
       const again = harness.adapter.acceptInvitation({
+        memberName: null,
         userId: user(),
         invitationToken: token('inv-1'),
         email: 'rep@example.com',
@@ -77,6 +84,7 @@ export function membershipSuite(name: string, make: () => MembershipHarness): vo
 
       for (const invitationToken of [token('unknown'), 'nope']) {
         const refused = adapter.acceptInvitation({
+          memberName: null,
           userId: user(),
           invitationToken,
           email: 'a@example.com',
@@ -91,6 +99,8 @@ export function membershipSuite(name: string, make: () => MembershipHarness): vo
       const { adapter, setStatus } = make()
       const userId = user()
       const { organizationId } = await adapter.createOrganization({
+        email: 'maya@northline.app',
+        memberName: null,
         userId,
         name: 'Northline',
         idempotencyKey: crypto.randomUUID(),
@@ -107,6 +117,8 @@ export function membershipSuite(name: string, make: () => MembershipHarness): vo
 
     test('a blank Organization name is refused', async () => {
       const refused = make().adapter.createOrganization({
+        email: 'maya@northline.app',
+        memberName: null,
         userId: user(),
         name: '   ',
         idempotencyKey: crypto.randomUUID(),
@@ -122,6 +134,8 @@ export function membershipSuite(name: string, make: () => MembershipHarness): vo
       await expect(harness.adapter.forUser(user())).rejects.toBeInstanceOf(MembershipUnavailable)
       await expect(
         harness.adapter.createOrganization({
+          email: 'maya@northline.app',
+          memberName: null,
           userId: user(),
           name: 'A',
           idempotencyKey: crypto.randomUUID(),

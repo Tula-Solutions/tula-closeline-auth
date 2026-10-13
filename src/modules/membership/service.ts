@@ -52,8 +52,8 @@ function translate(error: unknown) {
 
 /** What a sign-up asks of the core service: a new Organization, or an invitation to accept. */
 export type JoinRequest =
-  | { kind: 'create'; name: string }
-  | { kind: 'invitation'; token: string; email: string }
+  | { kind: 'create'; name: string; email: string; memberName: string | null }
+  | { kind: 'invitation'; token: string; email: string; memberName: string | null }
 
 /**
  * Makes a new user a member of an Organization, in the one way a user can start: by creating
@@ -77,11 +77,19 @@ export async function join(
   const { signal } = controller
   const call =
     request.kind === 'create'
-      ? deps.membership.createOrganization({ userId, name: request.name, idempotencyKey, signal })
+      ? deps.membership.createOrganization({
+          userId,
+          name: request.name,
+          email: request.email,
+          memberName: request.memberName,
+          idempotencyKey,
+          signal,
+        })
       : deps.membership.acceptInvitation({
           userId,
           invitationToken: request.token,
           email: request.email,
+          memberName: request.memberName,
           idempotencyKey,
           signal,
         })

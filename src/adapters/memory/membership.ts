@@ -1,4 +1,12 @@
-import { formatId, type OrganizationStatus, type Role, type UserId } from 'tula-closeline-contract'
+import {
+  emailSchema,
+  formatId,
+  internalCreateOrganizationRequestSchema,
+  type OrganizationStatus,
+  personNameSchema,
+  type Role,
+  type UserId,
+} from 'tula-closeline-contract'
 import {
   type Membership,
   type MembershipClaims,
@@ -24,6 +32,8 @@ export type MemoryMembership = MembershipClaims & {
   hold: () => () => void
   /** Every Organization created, in order. */
   readonly organizations: { name: string; owner: UserId; organizationId: string }[]
+  /** The email and name core was given for each member, in order (create and accept). */
+  readonly profiles: { userId: UserId; email: string; name: string | null }[]
   /** How many calls were made, by operation. */
   readonly calls: { create: number; accept: number; lookup: number; aborted: number }
 }
@@ -35,6 +45,7 @@ export function createMemoryMembership(): MemoryMembership {
   const invitations = new Map<string, { email: string; organizationId: string; role: Role }>()
   const organizations: MemoryMembership['organizations'] = []
   const statuses = new Map<string, OrganizationStatus>()
+  const profiles: MemoryMembership['profiles'] = []
   const calls = { create: 0, accept: 0, lookup: 0, aborted: 0 }
   let broken = false
   const guard = () => {
@@ -67,6 +78,7 @@ export function createMemoryMembership(): MemoryMembership {
 
   return {
     organizations,
+    profiles,
     calls,
     hold: () => {
       let release: () => void = () => {}
@@ -84,7 +96,7 @@ export function createMemoryMembership(): MemoryMembership {
     },
     setOrganizationStatus: (organizationId, status) => void statuses.set(organizationId, status),
     forget: (userId) => void members.delete(userId),
-    async createOrganization({ userId, name, idempotencyKey, signal }) {
+    async createOrganization({ userId, name, email, memberName, idempotencyKey, signal }) {
       calls.create += 1
       guard()
       await proceed(signal)
@@ -95,13 +107,25 @@ export function createMemoryMembership(): MemoryMembership {
       if (name.trim() === '') {
         throw new MembershipRefused('organization_name_invalid')
       }
+      // Core answers 400 to a request the contract refuses; the adapter sees that as unavailable.
+      if (
+        !internalCreateOrganizationRequestSchema.safeParse({
+          userId,
+          organizationName: name,
+          email,
+          name: memberName,
+        }).success
+      ) {
+        throw new MembershipUnavailable('core refused the request')
+      }
+      profiles.push({ userId, email, name: memberName })
       const membership: Membership = { organizationId: newOrganizationId(), role: 'owner' }
       organizations.push({ name, owner: userId, organizationId: membership.organizationId })
       members.set(userId, membership)
       byKey.set(idempotencyKey, membership)
       return membership
     },
-    async acceptInvitation({ userId, invitationToken, email, idempotencyKey, signal }) {
+    async acceptInvitation({ userId, invitationToken, email, memberName, idempotencyKey, signal }) {
       calls.accept += 1
       guard()
       await proceed(signal)
@@ -113,7 +137,14 @@ export function createMemoryMembership(): MemoryMembership {
       if (!invitation || invitation.email !== email) {
         throw new MembershipRefused('invitation_invalid')
       }
+      if (
+        !emailSchema.safeParse(email).success ||
+        (memberName !== null && !personNameSchema.safeParse(memberName).success)
+      ) {
+        throw new MembershipUnavailable('core refused the request')
+      }
       invitations.delete(invitationToken)
+      profiles.push({ userId, email, name: memberName })
       const membership: Membership = {
         organizationId: invitation.organizationId as Membership['organizationId'],
         role: invitation.role,

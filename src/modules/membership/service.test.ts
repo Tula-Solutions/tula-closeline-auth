@@ -13,13 +13,13 @@ describe('joining an Organization', () => {
     const first = await Membership.join(
       { membership },
       userId,
-      { kind: 'create', name: 'Northline' },
+      { kind: 'create', name: 'Northline', email: 'maya@northline.app', memberName: null },
       'signup:1'
     )
     const again = await Membership.join(
       { membership },
       userId,
-      { kind: 'create', name: 'Northline' },
+      { kind: 'create', name: 'Northline', email: 'maya@northline.app', memberName: null },
       'signup:1'
     )
 
@@ -32,13 +32,18 @@ describe('joining an Organization', () => {
     const membership = createMemoryMembership()
 
     await expect(
-      Membership.join({ membership }, userId, { kind: 'create', name: '  ' }, 'k1')
+      Membership.join(
+        { membership },
+        userId,
+        { kind: 'create', name: '  ', email: 'maya@northline.app', memberName: null },
+        'k1'
+      )
     ).rejects.toMatchObject({ code: 'signup.organization_name_invalid', status: 422 })
     await expect(
       Membership.join(
         { membership },
         userId,
-        { kind: 'invitation', token: 'nope', email: 'a@b.app' },
+        { kind: 'invitation', token: 'nope', email: 'a@b.app', memberName: null },
         'k2'
       )
     ).rejects.toMatchObject({ code: 'signup.invitation_invalid', status: 422 })
@@ -49,7 +54,12 @@ describe('joining an Organization', () => {
     membership.breakDown(true)
 
     await expect(
-      Membership.join({ membership }, userId, { kind: 'create', name: 'Northline' }, 'k')
+      Membership.join(
+        { membership },
+        userId,
+        { kind: 'create', name: 'Northline', email: 'maya@northline.app', memberName: null },
+        'k'
+      )
     ).rejects.toMatchObject({ code: 'membership.unavailable', status: 503 })
     await expect(Membership.of({ membership }, userId)).rejects.toMatchObject({
       code: 'membership.unavailable',
@@ -104,7 +114,12 @@ describe('a call that is given up on', () => {
 
     await withShortDeadline(async () => {
       await expect(
-        Membership.join({ membership }, userId, { kind: 'create', name: 'Northline' }, 'k')
+        Membership.join(
+          { membership },
+          userId,
+          { kind: 'create', name: 'Northline', email: 'maya@northline.app', memberName: null },
+          'k'
+        )
       ).rejects.toMatchObject({ code: 'membership.unavailable', status: 503 })
     })
 
@@ -128,7 +143,7 @@ describe('a call that is given up on', () => {
         Membership.join(
           { membership },
           userId,
-          { kind: 'invitation', token: 't', email: 'a@b.app' },
+          { kind: 'invitation', token: 't', email: 'a@b.app', memberName: null },
           'k'
         )
       ).rejects.toMatchObject({ code: 'membership.unavailable' })
@@ -150,7 +165,12 @@ describe('a call that is given up on', () => {
       return createOrganization(input)
     }
 
-    await Membership.join({ membership }, userId, { kind: 'create', name: 'Northline' }, 'k')
+    await Membership.join(
+      { membership },
+      userId,
+      { kind: 'create', name: 'Northline', email: 'maya@northline.app', memberName: null },
+      'k'
+    )
 
     expect(seen?.aborted).toBe(false)
   })
@@ -160,6 +180,8 @@ describe('what a token may be issued for', () => {
   const setup = async () => {
     const membership = createMemoryMembership()
     const { organizationId } = await membership.createOrganization({
+      email: 'maya@northline.app',
+      memberName: null,
       userId,
       name: 'Northline',
       idempotencyKey: 'signup:status-test-key',
@@ -198,7 +220,12 @@ describe('what a token may be issued for', () => {
       details: { retryAfter: Membership.MEMBERSHIP_RETRY_AFTER_SECONDS },
     })
     await expect(
-      Membership.join({ membership }, userId, { kind: 'create', name: 'A' }, 'signup:another-key-1')
+      Membership.join(
+        { membership },
+        userId,
+        { kind: 'create', name: 'A', email: 'maya@northline.app', memberName: null },
+        'signup:another-key-1'
+      )
     ).rejects.toMatchObject({ details: { retryAfter: Membership.MEMBERSHIP_RETRY_AFTER_SECONDS } })
   })
 })
