@@ -19,6 +19,25 @@ export interface NewUser extends Omit<UserRecord, 'bannedAt' | 'lastSignInAt'> {
   credentialId: string
   /** The argon2id hash of the password chosen at sign-up. */
   passwordHash: string
+  /**
+   * The abandon case (hub issue 36) this request recorded, settled as `not_needed` by the last
+   * statement of the account transaction. It locks the row the sweep's claim locks, so an account
+   * and a claimed case cannot both exist: when the sweep claimed first, `create` throws
+   * {@link AbandonCaseClaimed} and writes nothing. Absent for an invitation sign-up.
+   */
+  settlesAbandonCase?: string
+}
+
+/**
+ * Thrown by {@link UserRepository.create}, with nothing written, when the sweep claimed the
+ * attempt's abandon case before the account could commit: the Organization is (or is about to be)
+ * abandoned, so the person must sign up again.
+ */
+export class AbandonCaseClaimed extends Error {
+  constructor() {
+    super('the abandon case was claimed before the account could be written')
+    this.name = 'AbandonCaseClaimed'
+  }
 }
 
 /** A user as a password sign-in reads them: with the stored hash and when it was set. */

@@ -1,4 +1,5 @@
 import { createFixedClock, createLogger, type FixedClock } from 'tula-closeline-kit'
+import { createMemoryAbandonCases, type MemoryAbandonCases } from '~/adapters/memory/abandon-cases'
 import { MemoryBreachChecker } from '~/adapters/memory/breach-checker'
 import { createMemoryCounterPurger } from '~/adapters/memory/counter-purger'
 import { createMemoryExclusiveRunner } from '~/adapters/memory/exclusive-runner'
@@ -30,6 +31,8 @@ export type TestDeps = Container & {
   reported: { error: unknown; context: ErrorContext }[]
   /** The memory membership service, with the controls to arrange and break it. */
   membership: MemoryMembership
+  /** The abandon cases, with a control to make one due. */
+  abandonCases: MemoryAbandonCases
   /** The user repository, with a control to ban a user. */
   users: MemoryUserRepository
   /** The mailer that keeps what it was asked to send. */
@@ -68,6 +71,7 @@ export function createTestDeps(
   })
 
   const clock = createFixedClock('2026-01-01T00:00:00Z')
+  const abandonCases = createMemoryAbandonCases(clock)
   return {
     env,
     logger: createLogger({
@@ -85,7 +89,10 @@ export function createTestDeps(
     secretBox: createSecretBox(masterKey(env)),
     keyedHash: createKeyedHash(masterKey(env)),
     membership: createMemoryMembership(clock),
-    users: new MemoryUserRepository(),
+    abandonCases,
+    users: new MemoryUserRepository((environmentId, caseId) =>
+      abandonCases.settle(environmentId, caseId)
+    ),
     flowAttempts: new MemoryFlowAttemptStore(),
     verificationTokens: new MemoryVerificationTokenStore(),
     sessions: new MemorySessionStore(),

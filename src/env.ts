@@ -80,6 +80,13 @@ const schema = z
     RETENTION_BATCH_SIZE: z.coerce.number().int().min(1).max(5_000).default(500),
     /** The longest one purge run may take before it stops and waits for the next interval. */
     RETENTION_RUN_TIMEOUT_MS: z.coerce.number().int().min(100).max(300_000).default(30_000),
+    /** How often the abandon sweep looks for Organizations nobody owns, in ms (hub issue 36). */
+    ABANDON_SWEEP_INTERVAL_MS: z.coerce.number().int().min(100).max(3_600_000).default(60_000),
+    /**
+     * How many abandon cases one sweep claims at once. They are worked one after another and the
+     * lease is sized from this number, so a larger batch means a longer lease.
+     */
+    ABANDON_SWEEP_BATCH_SIZE: z.coerce.number().int().min(1).max(50).default(10),
     /**
      * How many password hashes or verifications run at once. Each takes about 64 MiB and a
      * core for roughly 90 ms, so this is the instance's ceiling on password work.

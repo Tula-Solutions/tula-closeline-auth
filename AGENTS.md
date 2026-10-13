@@ -56,7 +56,7 @@ The shape in `.claude/COMMON.md` is built; modules are under `src/modules/<name>
   advisory lock), `jwks` (keys, rotation, `/.well-known/jwks.json`), `token` (signs `at+jwt`),
   `flow` (sign-up and sign-in), `verification` (emailed codes), `password`, `membership` (the
   port to the core service, with a 5 s bound and an abort signal), `session` (create, refresh,
-  sign-out, list, authenticate), `user` (`/v1/client/me`), `retention` (the purge, below), `conformance` (the
+  sign-out, list, authenticate), `user` (`/v1/client/me`), `retention` (the purge, below), `abandon` (the sweep of Organizations nobody owns, hub issue 36), `conformance` (the
   scenario runner).
 - Readiness checks `database` and `bootstrap`; shutdown as in the template.
 - `openapi.json` is generated: `bun run openapi`; `verify` fails if it is stale.
@@ -106,11 +106,13 @@ verified address (normalized) and the name (first and last joined by a space, `n
 an Owner's Organization because the address belongs to a different user, auth asks core to
 abandon it at once (key `abandon:<attempt id>`, three tries inside one 5 s bound). An unexpected
 insert error is only reported: it cannot be proved final while the attempt is usable (a double
-submit would lose a working Organization), so that abandon waits for a sweep, which does not exist yet. Details, the outcomes and what is left:
+submit would lose a working Organization), so that abandon is left to the sweep (`modules/abandon`,
+below). Before core is asked, the attempt's case is recorded in `auth.abandon_cases`; a committed
+account resolves it in its own transaction. Details, the outcomes and the sweep:
 `.claude/rules/membership.md`.
 
 ## Retention
-The purge of expired attempts, codes and lockout counters (`modules/retention`): `.claude/rules/retention.md`. Sessions, refresh tokens and signing keys are not purged yet.
+The purge of expired attempts, codes and lockout counters (`modules/retention`): `.claude/rules/retention.md`. Sessions, refresh tokens and signing keys are not purged yet. The same purge deletes abandon cases resolved a day ago.
 
 ## Env keys (`src/env.ts`, mirrored in `.env.example`)
 
@@ -120,7 +122,8 @@ The purge of expired attempts, codes and lockout counters (`modules/retention`):
 and `CORE_INTERNAL_TOKEN` (32+ characters, never logged) (all five required outside `local`; in
 `local` both core keys or neither), `CORE_CONCURRENCY` (default 64), `CORE_QUEUE` (default 256),
 `TOKEN_AUDIENCE` (default `closeline`), `DB_POOL_MAX` (default 10, at least 4),
-`RETENTION_INTERVAL_MS`, `RETENTION_BATCH_SIZE`, `RETENTION_RUN_TIMEOUT_MS`, `HASH_CONCURRENCY`,
+`RETENTION_INTERVAL_MS`, `RETENTION_BATCH_SIZE`, `RETENTION_RUN_TIMEOUT_MS`,
+`ABANDON_SWEEP_INTERVAL_MS`, `ABANDON_SWEEP_BATCH_SIZE`, `HASH_CONCURRENCY`,
 `HASH_QUEUE`, `SIGN_IN_CONCURRENCY`, `SIGN_IN_QUEUE`, `BREACH_CHECK_CONCURRENCY`,
 `BREACH_CHECK_QUEUE`, `MAIL_LOCAL_URL`, `MAIL_LOCAL_FROM` (local only), `SESSION_ALLOWED_ORIGINS` (exact, distinct origins,
 comma-separated, https outside `local`, no wildcard; required outside `local`),

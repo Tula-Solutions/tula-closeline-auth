@@ -12,6 +12,7 @@ import { HibpBreachChecker } from '~/adapters/breach/hibp'
 import { createHttpMembership } from '~/adapters/http/membership'
 import { createMailpitMailer, DEFAULT_LOCAL_MAIL_FROM } from '~/adapters/mailpit/mailer'
 import { createPlaceholderMembership } from '~/adapters/placeholder/membership'
+import { createPostgresAbandonCases } from '~/adapters/postgres/abandon-cases'
 import {
   createPostgresCounterPurger,
   createPostgresLockout,
@@ -32,6 +33,7 @@ import { SERVICE } from '~/info'
 import { createWorkLimits, type WorkLimits } from '~/lib/concurrency'
 import { createKeyedHash, type KeyedHash } from '~/lib/keyed-hash'
 import { createSecretBox, type SecretBox } from '~/lib/secret-box'
+import type { AbandonCaseStore } from '~/ports/abandon-cases'
 import type { BreachChecker } from '~/ports/breach-checker'
 import type { CounterPurger } from '~/ports/counter-purger'
 import type { ExclusiveRunner } from '~/ports/exclusive-runner'
@@ -110,6 +112,8 @@ export type Container = {
   rateLimiter: RateLimiter
   /** Backs off repeated wrong passwords per address and per known device, counted in Postgres. */
   lockout: Lockout
+  /** Organizations core made for sign-ups whose account may never be written (hub issue 36). */
+  abandonCases: AbandonCaseStore
   /** Removes expired lockout and rate-limit counters, in bounded batches. */
   counterPurger: CounterPurger
   /** Lets work that must not run on two instances at once take turns (the purge). */
@@ -254,6 +258,7 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     mailer: createMailer(env, logger),
     rateLimiter: createPostgresRateLimiter(counters),
     lockout: createPostgresLockout(counters),
+    abandonCases: createPostgresAbandonCases(database.db),
     counterPurger: createPostgresCounterPurger(database.db),
     exclusive: createPostgresExclusiveRunner(database.db),
     limits: createWorkLimits(env),

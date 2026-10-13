@@ -1,8 +1,15 @@
 import { and, eq } from 'drizzle-orm'
-import { type Database, withEnvironment } from 'tula-closeline-db'
+import { ABANDON_SETTLE, type Database, withEnvironment } from 'tula-closeline-db'
 import { credentials, identities, users } from 'tula-closeline-db/schema'
-import { isUniqueViolation } from '~/adapters/postgres/errors'
-import type { NewUser, UserRecord, UserRepository, UserWithPassword } from '~/ports/user-repository'
+import { hasSqlState, isUniqueViolation } from '~/adapters/postgres/errors'
+import { statement } from '~/adapters/postgres/statement'
+import {
+  AbandonCaseClaimed,
+  type NewUser,
+  type UserRecord,
+  type UserRepository,
+  type UserWithPassword,
+} from '~/ports/user-repository'
 
 const columns = {
   id: users.id,
@@ -80,7 +87,7 @@ export class PostgresUserRepository implements UserRepository {
 
   /** @inheritdoc */
   async create(user: NewUser): Promise<boolean> {
-    const { identityId, credentialId, passwordHash, ...record } = user
+    const { identityId, credentialId, passwordHash, settlesAbandonCase, ...record } = user
     const scope = { projectId: user.projectId, environmentId: user.environmentId }
     const stamps = { createdAt: user.createdAt, updatedAt: user.createdAt }
     try {
@@ -105,11 +112,26 @@ export class PostgresUserRepository implements UserRepository {
           secretChangedAt: user.createdAt,
           ...stamps,
         })
+        if (settlesAbandonCase !== undefined) {
+          // Last statement, same transaction: it locks the row the sweep's claim locks (both at
+          // READ COMMITTED), so the account and a claimed case cannot both commit. No row means
+          // the sweep claimed (or resolved) the case first: roll the whole account back.
+          const settled = await tx.execute(
+            statement(ABANDON_SETTLE, [settlesAbandonCase, user.environmentId])
+          )
+          if (settled.rows.length === 0) {
+            throw new AbandonCaseClaimed()
+          }
+        }
       })
       return true
     } catch (error) {
       if (isUniqueViolation(error)) {
         return false
+      }
+      if (error instanceof AbandonCaseClaimed || hasSqlState(error, '40001')) {
+        // A serialization failure here can only be the settle racing the claim: a lost race too.
+        throw error instanceof AbandonCaseClaimed ? error : new AbandonCaseClaimed()
       }
       throw error
     }

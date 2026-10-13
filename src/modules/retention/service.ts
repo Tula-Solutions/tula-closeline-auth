@@ -17,6 +17,7 @@ export type RetentionDeps = Pick<
   | 'flowAttempts'
   | 'verificationTokens'
   | 'counterPurger'
+  | 'abandonCases'
   | 'exclusive'
   | 'reportError'
 >
@@ -30,7 +31,12 @@ export type RetentionDeps = Pick<
 export const PURGE_GRACE_MS = 2 * MEMBERSHIP_TIMEOUT_MS
 
 /** How many rows one purge removed, by kind. */
-export type PurgeResult = { attempts: number; tokens: number; counters: number }
+export type PurgeResult = {
+  attempts: number
+  tokens: number
+  counters: number
+  abandonCases: number
+}
 
 /** How a run ended: it purged, another instance held the lock, it failed, or it ran out of time. */
 export type RunOutcome = 'purged' | 'skipped' | 'failed' | 'timed_out'
@@ -60,7 +66,7 @@ function reportFailure(deps: RetentionDeps, what: string, cause: unknown): void 
 /**
  * Removes sign-in attempts (and, by cascade, their codes) and then verification codes that have
  * been expired for longer than {@link PURGE_GRACE_MS}, and then expired lockout and rate-limit
- * counters, `RETENTION_BATCH_SIZE` rows per statement, repeating while a batch comes back full, so
+ * counters and abandon cases resolved a day ago, `RETENTION_BATCH_SIZE` rows per statement, repeating while a batch comes back full, so
  * no statement holds locks for long however large the backlog. Stops between batches when
  * `signal` aborts.
  */
@@ -70,7 +76,7 @@ export async function purgeExpired(
   signal: AbortSignal = new AbortController().signal
 ): Promise<PurgeResult> {
   const limit = deps.env.RETENTION_BATCH_SIZE
-  const total: PurgeResult = { attempts: 0, tokens: 0, counters: 0 }
+  const total: PurgeResult = { attempts: 0, tokens: 0, counters: 0, abandonCases: 0 }
   const sweeps = [
     {
       key: 'attempts',
@@ -87,6 +93,11 @@ export async function purgeExpired(
       // behind the database clock).
       key: 'counters',
       delete: () => deps.counterPurger.deleteExpired(limit),
+    },
+    {
+      // Resolved abandon cases a day old (the database's clock decides; hub issue 36).
+      key: 'abandonCases',
+      delete: () => deps.abandonCases.purgeResolved(tenant.environmentId, limit),
     },
   ] as const
   for (const sweep of sweeps) {
@@ -118,7 +129,7 @@ export async function runOnce(
   const stop = () => controller.abort()
   signal?.addEventListener('abort', stop)
   try {
-    let purged: PurgeResult = { attempts: 0, tokens: 0, counters: 0 }
+    let purged: PurgeResult = { attempts: 0, tokens: 0, counters: 0, abandonCases: 0 }
     const ran = await withTimeout(
       deps.exclusive.runExclusive(RETENTION_LOCK, async () => {
         purged = await purgeExpired(deps, tenant, controller.signal)
@@ -126,7 +137,7 @@ export async function runOnce(
       deps.env.RETENTION_RUN_TIMEOUT_MS,
       () => new RunTimedOut()
     )
-    if (ran && (purged.attempts > 0 || purged.tokens > 0 || purged.counters > 0)) {
+    if (ran && Object.values(purged).some((count) => count > 0)) {
       deps.logger.info('purged expired sign-in data', purged)
     }
     return ran ? 'purged' : 'skipped'
