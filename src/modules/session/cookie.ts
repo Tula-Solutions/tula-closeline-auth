@@ -79,3 +79,18 @@ export function requireAllowedOrigin(
     throw fail(ERRORS['auth.forbidden'])
   }
 }
+
+/**
+ * The refresh failures after which the token can never work again (the session is over, or the
+ * token is unknown): the browser's cookie is cleared with them. Anything else (core unavailable,
+ * rate limiting, a 5xx, `auth.no_organization` which an operator may repair) leaves the token
+ * unspent, so the cookie stays and the client retries.
+ */
+export const TERMINAL_REFRESH_CODES: ReadonlySet<string> = new Set([
+  'session.invalid_token',
+  'session.revoked',
+  'session.expired',
+  'session.reuse_detected',
+  'auth.user_banned',
+  'organization.deleted',
+])

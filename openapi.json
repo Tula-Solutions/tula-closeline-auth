@@ -3049,6 +3049,16 @@
           },
           "401": {
             "description": "`session.expired`: This session has expired. Sign in again.\n`session.invalid_token`: The refresh token is not valid.\n`session.reuse_detected`: A refresh token was used twice, so the session was ended. Sign in again.\n`session.revoked`: This session has ended.",
+            "headers": {
+              "set-cookie": {
+                "schema": {
+                  "type": "string",
+                  "description": "Client type `browser`, when the code means the token can never work again (`session.*`, `auth.user_banned`, `organization.deleted`): the cookie cleared (`Max-Age=0`). Never on `auth.forbidden` or `membership.unavailable`."
+                },
+                "required": false,
+                "description": "Client type `browser`, when the code means the token can never work again (`session.*`, `auth.user_banned`, `organization.deleted`): the cookie cleared (`Max-Age=0`). Never on `auth.forbidden` or `membership.unavailable`."
+              }
+            },
             "content": {
               "application/json": {
                 "examples": {
@@ -3116,6 +3126,16 @@
           },
           "403": {
             "description": "`auth.forbidden`: You are not allowed to do this.\n`auth.no_organization`: You do not belong to an Organization, so you cannot sign in.\n`auth.user_banned`: This account cannot sign in.",
+            "headers": {
+              "set-cookie": {
+                "schema": {
+                  "type": "string",
+                  "description": "Client type `browser`, when the code means the token can never work again (`session.*`, `auth.user_banned`, `organization.deleted`): the cookie cleared (`Max-Age=0`). Never on `auth.forbidden` or `membership.unavailable`."
+                },
+                "required": false,
+                "description": "Client type `browser`, when the code means the token can never work again (`session.*`, `auth.user_banned`, `organization.deleted`): the cookie cleared (`Max-Age=0`). Never on `auth.forbidden` or `membership.unavailable`."
+              }
+            },
             "content": {
               "application/json": {
                 "examples": {
@@ -3175,6 +3195,16 @@
           },
           "410": {
             "description": "`organization.deleted`: This Organization has been deleted.",
+            "headers": {
+              "set-cookie": {
+                "schema": {
+                  "type": "string",
+                  "description": "Client type `browser`, when the code means the token can never work again (`session.*`, `auth.user_banned`, `organization.deleted`): the cookie cleared (`Max-Age=0`). Never on `auth.forbidden` or `membership.unavailable`."
+                },
+                "required": false,
+                "description": "Client type `browser`, when the code means the token can never work again (`session.*`, `auth.user_banned`, `organization.deleted`): the cookie cleared (`Max-Age=0`). Never on `auth.forbidden` or `membership.unavailable`."
+              }
+            },
             "content": {
               "application/json": {
                 "examples": {

@@ -79,8 +79,8 @@ secret travels in `x-tula-attempt`; the client kind in `x-tula-client`.
 `x-tula-client: browser` (stored as session client `web`) gets the refresh token in the cookie
 `__Secure-tula_refresh` (HttpOnly, Secure, SameSite=Strict, `Path=/v1/client/sessions/`), never in
 the body; refresh and sign-out read only the cookie, after an `Origin` allow-list check. Every
-other client type is unchanged. Rules: `.claude/rules/session.md`. The known-device cookie is not
-built here: it comes with the lockout change (hub issue 30), where its verification lives.
+other client type is unchanged. Rules: `.claude/rules/session.md`. The known-device cookie waits for
+the lockout change (hub issue 30), where its verification lives.
 
 ## Accounts and Organizations
 
@@ -107,18 +107,8 @@ open ticket on reconciling Organizations whose account was never written: `.clau
 
 ## Retention
 
-Sign-in data is short-lived (an attempt and a code live 10 minutes), and an abandoned sign-up
-holds an argon2id hash, the Organization name and a sealed invitation, so they must not be kept.
-`modules/retention` deletes attempts (and, by cascade, their codes) and then codes whose `expiresAt`
-has passed, `RETENTION_BATCH_SIZE` rows per statement, repeating while a batch comes back full. It
-runs at boot (not awaited) and every `RETENTION_INTERVAL_MS`, each run under a Postgres advisory
-lock (`ExclusiveRunner`, so only one instance purges at a time and the others skip) and bounded by
-`RETENTION_RUN_TIMEOUT_MS`. A failed or timed-out run is logged and reported to the error tracker
-(no row data) and the next interval tries again. Only rows expired for more than 10 s (twice the
-5 s bound on a call to core) are purged, so a sign-up that is waiting on core is never purged
-before it spends its code. It needs 2 connections at once, so `DB_POOL_MAX` is at least 4.
-Shutdown stops it before the pool closes. Sessions, refresh tokens and signing keys are not purged
-by this service yet.
+The purge of expired attempts and codes (`modules/retention`) and its rules: `.claude/rules/retention.md`.
+Sessions, refresh tokens and signing keys are not purged yet.
 
 ## Env keys (`src/env.ts`, mirrored in `.env.example`)
 
@@ -130,9 +120,9 @@ and `CORE_INTERNAL_TOKEN` (32+ characters, never logged) (all five required outs
 `TOKEN_AUDIENCE` (default `closeline`), `DB_POOL_MAX` (default 10, at least 4),
 `RETENTION_INTERVAL_MS`, `RETENTION_BATCH_SIZE`, `RETENTION_RUN_TIMEOUT_MS`, `HASH_CONCURRENCY`,
 `HASH_QUEUE`, `SIGN_IN_CONCURRENCY`, `SIGN_IN_QUEUE`, `BREACH_CHECK_CONCURRENCY`,
-`BREACH_CHECK_QUEUE`, `MAIL_LOCAL_URL`, `MAIL_LOCAL_FROM` (local only), `SESSION_ALLOWED_ORIGINS` (exact origins,
-comma-separated, https outside `local`, no wildcard; unset refuses every browser refresh and sign-out),
-`SESSION_COOKIE_INSECURE` (`true` only in `local`: drops `Secure` and the prefix). Add a key in both files.
+`BREACH_CHECK_QUEUE`, `MAIL_LOCAL_URL`, `MAIL_LOCAL_FROM` (local only), `SESSION_ALLOWED_ORIGINS` (exact, distinct origins,
+comma-separated, https outside `local`, no wildcard; required outside `local`),
+`SESSION_COOKIE_INSECURE` (`true` only in `local`). Add a key in both files.
 
 ## Tests
 
@@ -199,7 +189,6 @@ too, only a token spent beyond grace and an expired token cost no call),
 one signature, one rotation. The membership lookup through the HTTP adapter is a hot path too
 (`bench/membership.bench.test.ts`: best batch about 53 ms per 500 lookups, budget 270 ms). The
 JWKS and bearer routes read at most 20 keys, bounded in SQL by retirement time and a limit.
-The cookie variant adds only string work and has its own benchmark.
 Budgets are in `bench/`.
 
 A benchmark times `measure(operation)`: a warm-up, then several batches, gated on the fastest, so a

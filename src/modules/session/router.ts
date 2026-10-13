@@ -29,6 +29,7 @@ import {
   readRefreshCookie,
   requireAllowedOrigin,
   setRefreshCookie,
+  TERMINAL_REFRESH_CODES,
 } from './cookie'
 import * as Sessions from './refresh'
 import * as Auth from './service'
@@ -94,6 +95,34 @@ const body = {
   content: { 'application/json': { schema: refreshRequestSchema } },
 }
 
+/**
+ * Marks the responses that can carry the clearing `Set-Cookie` (client type `browser`, a refresh
+ * that can never work again: 401 session codes, 403 `auth.user_banned`, 410 `organization.deleted`).
+ */
+function withClearedCookie<T extends Record<string, object>>(responses: T): T {
+  return Object.fromEntries(
+    Object.entries(responses).map(([status, response]) => [
+      status,
+      ['401', '403', '410'].includes(status)
+        ? {
+            ...response,
+            headers: z.object({
+              'set-cookie': z
+                .string()
+                .optional()
+                .openapi({
+                  description:
+                    'Client type `browser`, when the code means the token can never work again ' +
+                    '(`session.*`, `auth.user_banned`, `organization.deleted`): the cookie cleared ' +
+                    '(`Max-Age=0`). Never on `auth.forbidden` or `membership.unavailable`.',
+                }),
+            }),
+          }
+        : response,
+    ])
+  ) as T
+}
+
 const refresh = createRoute({
   method: 'post',
   path: '/v1/client/sessions/refresh',
@@ -123,19 +152,21 @@ const refresh = createRoute({
         },
       },
     },
-    ...errorResponses([
-      ...BODY_ERRORS,
-      'auth.forbidden',
-      'session.invalid_token',
-      'session.revoked',
-      'session.expired',
-      'session.reuse_detected',
-      'auth.user_banned',
-      'auth.no_organization',
-      'organization.deleted',
-      'membership.unavailable',
-      'server.internal',
-    ]),
+    ...withClearedCookie(
+      errorResponses([
+        ...BODY_ERRORS,
+        'auth.forbidden',
+        'session.invalid_token',
+        'session.revoked',
+        'session.expired',
+        'session.reuse_detected',
+        'auth.user_banned',
+        'auth.no_organization',
+        'organization.deleted',
+        'membership.unavailable',
+        'server.internal',
+      ])
+    ),
   },
 })
 
@@ -204,12 +235,19 @@ export function createSessionRouter(container: Container): OpenAPIHono<AppEnv> {
   router.post(
     refresh.path,
     cookieFlow(async (c, token) => {
-      if (token === undefined) {
-        throw fail(AUTH_ERRORS['session.invalid_token'])
+      try {
+        if (token === undefined) {
+          throw fail(AUTH_ERRORS['session.invalid_token'])
+        }
+        const issued = await Sessions.refresh(container, tenant(), token, onNoOrganization(c))
+        c.header('Set-Cookie', setRefreshCookie(container.env, issued, container.clock.now()))
+        return c.json(Auth.browserBodyOf(issued), 200)
+      } catch (error) {
+        if (error instanceof AppError && TERMINAL_REFRESH_CODES.has(error.code)) {
+          c.header('Set-Cookie', clearRefreshCookie(container.env))
+        }
+        throw error
       }
-      const issued = await Sessions.refresh(container, tenant(), token, onNoOrganization(c))
-      c.header('Set-Cookie', setRefreshCookie(container.env, issued, container.clock.now()))
-      return c.json(Auth.browserBodyOf(issued), 200)
     })
   )
   router.post(

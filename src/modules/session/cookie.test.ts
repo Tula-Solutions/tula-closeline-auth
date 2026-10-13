@@ -190,7 +190,9 @@ describe('refreshing with the cookie', () => {
 
     expect(reply.status).toBe(401)
     expect(at(reply.body, 'error.code')).toBe('session.invalid_token')
-    expect(reply.headers.getSetCookie()).toEqual([])
+    expect(reply.headers.getSetCookie()).toEqual([
+      `${NAME}=; Path=${PATH}; Max-Age=0; HttpOnly; Secure; SameSite=Strict`,
+    ])
     // The token was not spent: the cookie still works.
     const ok = await call(app, 'POST', '/v1/client/sessions/refresh', {
       client: 'browser',
@@ -544,5 +546,191 @@ describe('nothing sensitive reaches a log, an error or the reporter', () => {
     }
     expect(everything).not.toContain('Set-Cookie')
     expect(everything.toLowerCase()).not.toContain('cookie')
+  })
+})
+
+const CLEAR = `${NAME}=; Path=${PATH}; Max-Age=0; HttpOnly; Secure; SameSite=Strict`
+
+describe('a refresh that can never work again clears the cookie', () => {
+  test('a terminal refusal clears the cookie with no-store, beyond the grace window', async () => {
+    const { deps, done, refresh } = await setup()
+    const old = cookieOf(done.headers)
+    await refresh(old)
+    deps.clock.advance('11s')
+
+    const replay = await refresh(old)
+
+    expect(at(replay.body, 'error.code')).toBe('session.reuse_detected')
+    expect(replay.headers.getSetCookie()).toEqual([CLEAR])
+    expect(replay.headers.get('cache-control')).toBe('no-store')
+  })
+
+  test('a revoked session, an unknown token, a banned user and an expired session clear it', async () => {
+    const { deps, done, refresh, signOut } = await setup()
+    const unknown = await refresh(`${NAME}=tula_rt_${'2'.repeat(64)}`)
+    const garbage = await refresh(`${NAME}=nonsense`)
+    const missing = await call(createApp(deps), 'POST', '/v1/client/sessions/refresh', {
+      client: 'browser',
+      headers: { origin: ORIGIN },
+    })
+    const cookie = cookieOf(done.headers)
+    await signOut(cookie)
+    const revoked = await refresh(cookie)
+
+    for (const [reply, code] of [
+      [unknown, 'session.invalid_token'],
+      [garbage, 'session.invalid_token'],
+      [missing, 'session.invalid_token'],
+      [revoked, 'session.revoked'],
+    ] as const) {
+      expect(at(reply.body, 'error.code')).toBe(code)
+      expect(reply.headers.getSetCookie()).toEqual([CLEAR])
+      expect(reply.headers.get('cache-control')).toBe('no-store')
+    }
+  })
+
+  test('an expired session clears it', async () => {
+    const { deps, done, refresh } = await setup()
+    deps.clock.advance('31d')
+
+    const reply = await refresh(cookieOf(done.headers))
+
+    expect(at(reply.body, 'error.code')).toBe('session.expired')
+    expect(reply.headers.getSetCookie()).toEqual([CLEAR])
+  })
+
+  test('a banned user clears it', async () => {
+    const { deps, done, refresh } = await setup()
+    const environmentId = deps.tenant.current?.environmentId ?? ''
+    const user = await deps.users.findByEmail(environmentId, 'maya@northline.app')
+    deps.users.ban(user?.id ?? '', deps.clock.now())
+
+    const reply = await refresh(cookieOf(done.headers))
+
+    expect(at(reply.body, 'error.code')).toBe('auth.user_banned')
+    expect(reply.headers.getSetCookie()).toEqual([CLEAR])
+  })
+
+  test('a transient failure does not clear it, and the same cookie works after', async () => {
+    const { deps, done, refresh } = await setup()
+    const cookie = cookieOf(done.headers)
+    deps.membership.breakDown(true)
+
+    const down = await refresh(cookie)
+
+    expect(down.status).toBe(503)
+    expect(down.headers.getSetCookie()).toEqual([])
+    deps.membership.breakDown(false)
+    expect((await refresh(cookie)).status).toBe(200)
+  })
+
+  test('a refused Origin does not clear it: a foreign page cannot sign the user out', async () => {
+    const { done, refresh } = await setup()
+    const cookie = cookieOf(done.headers)
+
+    const reply = await refresh(cookie, { origin: 'https://evil.test' })
+
+    expect(reply.status).toBe(403)
+    expect(reply.headers.getSetCookie()).toEqual([])
+  })
+
+  test('refresh after sign-out is 401 and clears', async () => {
+    const { done, refresh, signOut } = await setup()
+    const cookie = cookieOf(done.headers)
+    await signOut(cookie)
+
+    const reply = await refresh(cookie)
+
+    expect(reply.status).toBe(401)
+    expect(reply.headers.getSetCookie()).toEqual([CLEAR])
+  })
+})
+
+describe('reading the Cookie header', () => {
+  test('with the name twice, the first one wins', async () => {
+    const { done, refresh } = await setup()
+    const good = cookieOf(done.headers)
+    const bad = `${NAME}=tula_rt_${'3'.repeat(64)}`
+
+    expect((await refresh(`${good}; ${bad}`)).status).toBe(200)
+    const next = await refresh(`${bad}; ${cookieOf(done.headers)}`)
+    expect(next.status).toBe(401)
+  })
+
+  test('only the configured name is read', async () => {
+    const { done, refresh } = await setup()
+    const value = tokenOf(done.headers)
+
+    for (const cookie of [
+      `tula_refresh=${value}`,
+      `x${NAME}=${value}`,
+      `${NAME}x=${value}`,
+      `${NAME.toLowerCase()}=${value}`,
+    ]) {
+      expect((await refresh(cookie)).status).toBe(401)
+    }
+    expect((await refresh(`tula_refresh=${value}; ${NAME}=${value}`)).status).toBe(200)
+  })
+
+  test('the unprefixed name is the one read when insecure, and not the prefixed one', async () => {
+    const { done, refresh } = await setup({ env: { SESSION_COOKIE_INSECURE: 'true' } })
+    const value = tokenOf(done.headers, 'tula_refresh')
+
+    expect((await refresh(`${NAME}=${value}`)).status).toBe(401)
+    expect((await refresh(`tula_refresh=${value}`)).status).toBe(200)
+  })
+
+  test('a quoted value is not a token', async () => {
+    const { done, refresh } = await setup()
+
+    const reply = await refresh(`${NAME}="${tokenOf(done.headers)}"`)
+
+    expect(reply.status).toBe(401)
+    expect(at(reply.body, 'error.code')).toBe('session.invalid_token')
+  })
+
+  test('a very long header is answered without error', async () => {
+    const { refresh } = await setup()
+
+    const reply = await refresh(`${NAME}=${'a'.repeat(200_000)}`)
+
+    expect(reply.status).toBe(401)
+    expect(at(reply.body, 'error.code')).toBe('session.invalid_token')
+  })
+})
+
+describe('no-store on every response that sets or clears the cookie', () => {
+  test('sign-up, sign-in, refresh, sign-out and the clears', async () => {
+    const { done, signIn, refresh, signOut } = await setup()
+    const replies = [
+      done,
+      await signIn(),
+      await refresh(cookieOf(done.headers)),
+      await refresh(`${NAME}=nonsense`),
+      await signOut(cookieOf(done.headers)),
+      await signOut(undefined),
+    ]
+
+    for (const reply of replies) {
+      expect(reply.headers.getSetCookie()).toHaveLength(1)
+      expect(reply.headers.get('cache-control')).toBe('no-store')
+    }
+  })
+})
+
+describe('two tabs refreshing together', () => {
+  test('both succeed, the session lives, and the cookie the browser keeps still refreshes', async () => {
+    const { done, refresh } = await setup()
+    const cookie = cookieOf(done.headers)
+
+    const [a, b] = await Promise.all([refresh(cookie), refresh(cookie)])
+
+    expect(a.status).toBe(200)
+    expect(b.status).toBe(200)
+    expect(text(a.body, 'accessToken').length).toBeGreaterThan(20)
+    expect(text(b.body, 'accessToken').length).toBeGreaterThan(20)
+    expect(tokenOf(a.headers)).toBe(tokenOf(b.headers))
+    expect((await refresh(cookieOf(b.headers))).status).toBe(200)
+    expect((await refresh(cookieOf(a.headers))).status).toBe(200)
   })
 })
