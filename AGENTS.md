@@ -107,7 +107,8 @@ yet.
 `READINESS_TIMEOUT_MS`, `SHUTDOWN_TIMEOUT_MS`, `SHUTDOWN_GRACE_MS`, `MAX_REQUEST_BODY_BYTES`,
 `DATABASE_URL`, `AUTH_MASTER_KEY` (64 hex, never logged) and `PUBLIC_URL` (all three required
 outside `local`), `TOKEN_AUDIENCE` (default `closeline`), `DB_POOL_MAX` (default 10),
-`RETENTION_INTERVAL_MS`, `RETENTION_BATCH_SIZE`, `RETENTION_RUN_TIMEOUT_MS`. Add a key in both files.
+`RETENTION_INTERVAL_MS`, `RETENTION_BATCH_SIZE`, `RETENTION_RUN_TIMEOUT_MS`, `HASH_CONCURRENCY`,
+`HASH_QUEUE`, `BREACH_CHECK_CONCURRENCY`, `BREACH_CHECK_QUEUE`. Add a key in both files.
 
 ## Tests
 
@@ -127,8 +128,16 @@ scenarios against real Postgres as the `closeline_auth` role (`POSTGRES_PORT` mo
   expired keys go first, then the oldest key that is not locked or at its limit; a locked key is
   never evicted, and if every key is locked a new key is refused (fails closed).
 - No mail provider: the runtime mailer fails with `mail.unavailable`. Tests use the memory mailer.
-- No per-IP limit on sign-up and sign-in starts, and argon2id (64 MiB) runs before any limit on
-  a sign-up: capacity planning needs a trusted-proxy decision.
+- No per-IP limit on sign-up and sign-in starts: it needs a trusted-proxy decision. What bounds
+  the cost of a flood instead: a sign-up checks the password policy (local), then counts the send
+  against the per-address cooldown and hourly cap, and only then makes the breach lookup and the
+  argon2id hash, so an address over its cap costs neither (a password the breach list refuses
+  does spend one send). Hashing and verification run in a concurrency limiter
+  (`HASH_CONCURRENCY`, `HASH_QUEUE`) and the breach lookup in another
+  (`BREACH_CHECK_CONCURRENCY`, `BREACH_CHECK_QUEUE`); when one is full and its queue too, the
+  request is a 503 `server.unavailable` with `Retry-After` and is not reported to the error
+  tracker. A sign-in start is still unthrottled per address (5 free password tries per
+  identifier, and the dummy hash for an unknown one, are bounded only by the hash limiter).
 - Key rotation has a service function (`Jwks.rotate`) but no route or schedule.
 
 ## Hot paths

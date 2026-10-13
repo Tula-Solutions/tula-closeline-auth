@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { formatId, type UserId } from 'tula-closeline-contract'
 import { createApp } from '~/app'
 import { AUTH_ERRORS } from '~/errors'
+import { type ConcurrencyLimiter, Saturated } from '~/lib/concurrency'
 import { createReadyDeps } from '~/testing'
 import { at, call, emailedCode, text, wrongCode } from '~/testing/client'
 
@@ -368,6 +369,26 @@ describe('sign-in', () => {
     return { started, password }
   }
 
+  test('with the hash limiter full the password step of a sign-in is a 503 with Retry-After', async () => {
+    const { deps, app, signedUp } = await setup()
+    const { email } = await signedUp()
+    const { password } = await startSignIn(app, email)
+    deps.limits = {
+      ...deps.limits,
+      hash: {
+        run: async () => {
+          throw new Saturated()
+        },
+      },
+    }
+
+    const reply = await password(PASSWORD)
+
+    expect(reply.status).toBe(503)
+    expect(reply.body).toMatchObject({ error: { code: 'server.unavailable' } })
+    expect(deps.reported).toHaveLength(0)
+  })
+
   test('a known and an unknown address start identically and fail identically', async () => {
     const { app, signedUp, nextEmail } = await setup()
     const { email } = await signedUp()
@@ -493,4 +514,119 @@ describe('text the database cannot store', () => {
     expect(reply.body).toMatchObject({ error: { code: 'request.invalid' } })
     expect(deps.reported).toHaveLength(0)
   })
+})
+
+describe('what a sign-up costs before it is allowed', () => {
+  /** Counts how often the limiter is used and the most that ever ran inside it at once. */
+  function watching(limiter: ConcurrencyLimiter) {
+    const seen = { runs: 0, peak: 0, running: 0 }
+    const watched: ConcurrencyLimiter = {
+      async run(work) {
+        seen.runs += 1
+        return limiter.run(async () => {
+          seen.running += 1
+          seen.peak = Math.max(seen.peak, seen.running)
+          try {
+            return await work()
+          } finally {
+            seen.running -= 1
+          }
+        })
+      },
+    }
+    return { watched, seen }
+  }
+
+  test('a sign-up over the hourly cap makes no breach lookup and no hash', async () => {
+    const { deps, signUp } = await setup()
+    const hashing = watching(deps.limits.hash)
+    deps.limits = { ...deps.limits, hash: hashing.watched }
+    for (let n = 0; n < 5; n++) {
+      expect((await signUp('cap@northline.app')).status).toBe(200)
+      deps.clock.advance('2m')
+    }
+    const checksBefore = deps.breachChecker.checks
+    const hashesBefore = hashing.seen.runs
+
+    const over = await signUp('cap@northline.app')
+
+    expect(over.status).toBe(429)
+    expect(over.body).toMatchObject({ error: { code: 'verification.too_many_attempts' } })
+    expect(deps.breachChecker.checks).toBe(checksBefore)
+    expect(hashing.seen.runs).toBe(hashesBefore)
+  })
+
+  test('a password the policy refuses makes no breach lookup, no hash and spends no send', async () => {
+    const { deps, signUp } = await setup()
+    const hashing = watching(deps.limits.hash)
+    deps.limits = { ...deps.limits, hash: hashing.watched }
+
+    const refused = await call(createApp(deps), 'POST', '/v1/client/sign-ups', {
+      body: { email: 'weak@northline.app', password: 'short', organizationName: 'Northline' },
+    })
+    const checksAfterRefusal = deps.breachChecker.checks
+    const hashesAfterRefusal = hashing.seen.runs
+    const retried = await signUp('weak@northline.app')
+
+    expect(refused.status).toBe(422)
+    expect(checksAfterRefusal).toBe(0)
+    expect(hashesAfterRefusal).toBe(0)
+    expect(retried.status).toBe(200)
+  })
+
+  test('fifty sign-ups at once never run more than the configured number of hashes together', async () => {
+    const deps = await createReadyDeps({
+      env: { HASH_CONCURRENCY: '3', HASH_QUEUE: '100', BREACH_CHECK_QUEUE: '100' },
+    })
+    const hashing = watching(deps.limits.hash)
+    deps.limits = { ...deps.limits, hash: hashing.watched }
+    const app = createApp(deps)
+
+    const replies = await Promise.all(
+      Array.from({ length: 50 }, (_, n) =>
+        call(app, 'POST', '/v1/client/sign-ups', {
+          body: {
+            email: `burst${n}@northline.app`,
+            password: PASSWORD,
+            organizationName: 'Northline',
+          },
+        })
+      )
+    )
+
+    expect(replies.map((reply) => reply.status)).toEqual(Array(50).fill(200))
+    expect(hashing.seen.runs).toBe(50)
+    expect(hashing.seen.peak).toBeLessThanOrEqual(3)
+    expect(hashing.seen.peak).toBeGreaterThan(0)
+  })
+
+  test.each(['hash', 'breach'] as const)(
+    'with the %s limiter full a sign-up is a 503 with Retry-After and is not reported',
+    async (which) => {
+      const { deps, app } = await setup()
+      deps.limits = {
+        ...deps.limits,
+        [which]: {
+          run: async () => {
+            throw new Saturated()
+          },
+        },
+      }
+
+      const response = await app.request('/v1/client/sign-ups', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          email: 'busy@northline.app',
+          password: PASSWORD,
+          organizationName: 'Northline',
+        }),
+      })
+
+      expect(response.status).toBe(503)
+      expect(await response.json()).toMatchObject({ error: { code: 'server.unavailable' } })
+      expect(Number(response.headers.get('retry-after'))).toBeGreaterThanOrEqual(1)
+      expect(deps.reported).toHaveLength(0)
+    }
+  )
 })

@@ -29,6 +29,17 @@ const schema = z
     RETENTION_BATCH_SIZE: z.coerce.number().int().min(1).max(5_000).default(500),
     /** The longest one purge run may take before it stops and waits for the next interval. */
     RETENTION_RUN_TIMEOUT_MS: z.coerce.number().int().min(100).max(300_000).default(30_000),
+    /**
+     * How many password hashes or verifications run at once. Each takes about 64 MiB and a
+     * core for roughly 90 ms, so this is the instance's ceiling on password work.
+     */
+    HASH_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(4),
+    /** How many more may wait for a hash slot; past that a request gets a 503 at once. */
+    HASH_QUEUE: z.coerce.number().int().min(0).max(1_000).default(16),
+    /** How many breached-password lookups run at once. */
+    BREACH_CHECK_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(8),
+    /** How many more may wait for a lookup slot; past that a request gets a 503 at once. */
+    BREACH_CHECK_QUEUE: z.coerce.number().int().min(0).max(1_000).default(16),
     /** The Region this deployment serves (ADR 0001); stamped into every token. No default. */
     REGION: regionSchema,
     /** The `closeline_auth` login. Defaults to the local compose database in `local` only. */

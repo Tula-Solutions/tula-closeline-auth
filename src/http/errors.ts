@@ -4,6 +4,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { ERRORS, type ErrorDefinition, type RequestId } from 'tula-closeline-contract'
 import { isAppError, toErrorBody } from 'tula-closeline-kit'
 import { type Container, reportSafely } from '~/container'
+import { Overloaded } from '~/errors'
 import { REQUEST_ID_HEADER } from '~/http/request-id'
 import type { AppEnv } from '~/http/types'
 
@@ -81,10 +82,16 @@ export function createErrorHandler(container: Container): ErrorHandler<AppEnv> {
       if (!isErrorStatus(error.status)) {
         return internal(error, c)
       }
-      if (error.status >= SERVER_ERROR) {
+      if (error.status >= SERVER_ERROR && !(error instanceof Overloaded)) {
         report(error, c, error.status)
       }
-      return c.json(toErrorBody(error), error.status as ContentfulStatusCode)
+      // A wait the body names (`details.retryAfter`, seconds) is also sent as the header.
+      const retryAfter = error.details?.retryAfter
+      return c.json(
+        toErrorBody(error),
+        error.status as ContentfulStatusCode,
+        typeof retryAfter === 'number' ? { 'retry-after': String(retryAfter) } : undefined
+      )
     }
 
     if (error instanceof HTTPException) {

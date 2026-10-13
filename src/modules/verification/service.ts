@@ -34,7 +34,12 @@ function hashInput(tokenId: string, code: string): string {
   return `${tokenId}:${code}`
 }
 
-async function enforceSendLimits(
+/**
+ * Counts one send against the per-address limits (a cooldown and an hourly cap).
+ *
+ * @throws AppError `verification.too_many_attempts` (429) with `details.retryAfter`.
+ */
+export async function enforceSendLimits(
   deps: Pick<Container, 'rateLimiter'>,
   tenant: Tenant,
   normalized: string
@@ -62,10 +67,18 @@ async function enforceSendLimits(
 export async function issue(
   deps: VerificationDeps,
   tenant: Tenant,
-  input: { flowAttemptId: string; destination: string; message?: Delivery }
+  input: {
+    flowAttemptId: string
+    destination: string
+    message?: Delivery
+    /** The caller already counted this send with {@link enforceSendLimits}. */
+    limitsEnforced?: boolean
+  }
 ): Promise<void> {
   const destination = normalizeEmail(input.destination)
-  await enforceSendLimits(deps, tenant, destination)
+  if (!input.limitsEnforced) {
+    await enforceSendLimits(deps, tenant, destination)
+  }
 
   const code = randomDigits(CODE_LENGTH)
   const ttlMinutes = durationToMs(TOKEN_TTL) / 60_000

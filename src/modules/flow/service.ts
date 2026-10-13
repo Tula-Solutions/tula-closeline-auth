@@ -169,12 +169,18 @@ export async function signUp(
   const { email, normalized: identifier } = parsed
   const firstName = input.firstName?.trim() || null
   const lastName = input.lastName?.trim() || null
-  await Passwords.assess(deps, input.password, {
+  // Cheapest first, so a request that will be refused costs as little as possible: the local
+  // policy, then the per-address send limit, and only then the breach lookup (a third party) and
+  // the hash (64 MiB, a core). An address over its hourly cap makes neither, and a refusal
+  // writes nothing.
+  const normalizedPassword = Passwords.checkPolicy(input.password, {
     email,
     firstName: firstName ?? undefined,
     lastName: lastName ?? undefined,
   })
-  const passwordHash = await Passwords.hash(input.password)
+  await Verification.enforceSendLimits(deps, tenant, identifier)
+  await Passwords.checkBreach(deps, normalizedPassword)
+  const passwordHash = await Passwords.hash(deps, input.password)
 
   // An address that already has an account gets an attempt that looks the same and can never
   // complete, and the account's owner gets a notice instead of a code: starting a sign-up must
@@ -211,6 +217,7 @@ export async function signUp(
     await Verification.issue(deps, tenant, {
       flowAttemptId: attempt.id,
       destination: email,
+      limitsEnforced: true,
       ...(decoy ? { message: (_code, _ttl, to) => accountExistsEmail(to) } : {}),
     })
   } catch (error) {
@@ -385,7 +392,7 @@ export async function submitPassword(
   }
 
   const found = await deps.users.findByEmailWithPassword(tenant.environmentId, attempt.identifier)
-  if (!(await Passwords.verify(found?.passwordHash ?? null, input.password)) || !found) {
+  if (!(await Passwords.verify(deps, found?.passwordHash ?? null, input.password)) || !found) {
     throw fail(AUTH_ERRORS['auth.invalid_credentials'])
   }
   await deps.lockout.clear(lockKey)
@@ -399,7 +406,7 @@ export async function submitPassword(
       tenant.environmentId,
       user.id,
       found.passwordHash,
-      await Passwords.hash(input.password),
+      await Passwords.hash(deps, input.password),
       deps.clock.now()
     )
   }

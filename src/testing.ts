@@ -15,6 +15,7 @@ import { uuidV7Ids } from '~/adapters/system/ids'
 import type { Container, ErrorContext, ReadinessCheck } from '~/container'
 import { loadEnv, masterKey } from '~/env'
 import { SERVICE } from '~/info'
+import { createWorkLimits } from '~/lib/concurrency'
 import { createKeyedHash } from '~/lib/keyed-hash'
 import { createSecretBox } from '~/lib/secret-box'
 import * as Bootstrap from '~/modules/bootstrap/service'
@@ -83,6 +84,7 @@ export function createTestDeps(
     rateLimiter: new MemoryRateLimiter(clock),
     lockout: new MemoryLockout(clock),
     exclusive: createMemoryExclusiveRunner(),
+    limits: createWorkLimits(env),
     breachChecker: new MemoryBreachChecker(overrides.breached),
     close: async () => {},
     reportError: (error, context) => {

@@ -1,5 +1,6 @@
 import type { Container } from '~/container'
-import { AUTH_ERRORS, fail } from '~/errors'
+import { AUTH_ERRORS, fail, Overloaded } from '~/errors'
+import { type ConcurrencyLimiter, Saturated } from '~/lib/concurrency'
 import {
   evaluatePassword,
   normalizePassword,
@@ -34,6 +35,18 @@ const POLICY_ERRORS = {
   'password.common': AUTH_ERRORS['password.common'],
 } as const
 
+/** What password work needs from the container: the limiters that bound it. */
+export type PasswordDeps = Pick<Container, 'limits'>
+
+/** Runs `work` inside a limiter; a full limiter is a 503 the client retries, not a fault. */
+async function limited<T>(limiter: ConcurrencyLimiter, work: () => Promise<T>): Promise<T> {
+  try {
+    return await limiter.run(work)
+  } catch (error) {
+    throw error instanceof Saturated ? new Overloaded() : error
+  }
+}
+
 function normalizeCapped(password: string): string | null {
   if (password.length > MAX_RAW_LENGTH) {
     return null
@@ -42,26 +55,37 @@ function normalizeCapped(password: string): string | null {
   return [...normalized].length > MAX_PASSWORD_LENGTH ? null : normalized
 }
 
-/** Hashes a password with argon2id after NFC normalization. */
-export async function hash(password: string): Promise<string> {
+/**
+ * Hashes a password with argon2id after NFC normalization, inside the hash limiter.
+ *
+ * @throws AppError `password.too_long`, or `server.unavailable` (503) when the limiter is full.
+ */
+export async function hash(deps: PasswordDeps, password: string): Promise<string> {
   const normalized = normalizeCapped(password)
   if (normalized === null) {
     throw fail(AUTH_ERRORS['password.too_long'], { max: MAX_PASSWORD_LENGTH })
   }
-  return Bun.password.hash(normalized, HASH_OPTIONS)
+  return limited(deps.limits.hash, () => Bun.password.hash(normalized, HASH_OPTIONS))
 }
 
 /**
  * Checks a password against a stored hash. With no hash it still pays for one verification (a
- * dummy hash) and answers `false`, so an unknown account takes as long as a known one.
+ * dummy hash) and answers `false`, so an unknown account takes as long as a known one. Runs inside
+ * the hash limiter; a full limiter is `server.unavailable` (503), the same for every account.
  */
-export async function verify(storedHash: string | null, password: string): Promise<boolean> {
+export async function verify(
+  deps: PasswordDeps,
+  storedHash: string | null,
+  password: string
+): Promise<boolean> {
   const normalized = normalizeCapped(password)
   // No stored password can be this long, so rejecting early leaks nothing about the account.
   if (normalized === null) {
     return false
   }
-  const matches = await Bun.password.verify(normalized, storedHash ?? DUMMY_HASH)
+  const matches = await limited(deps.limits.hash, () =>
+    Bun.password.verify(normalized, storedHash ?? DUMMY_HASH)
+  )
   return storedHash !== null && matches
 }
 
@@ -75,15 +99,12 @@ function fieldError(check: PasswordCheck) {
 }
 
 /**
- * Refuses a password that breaks the policy or appears in a known breach.
+ * Refuses a password that breaks the policy. Cheap and local: no lookup, no hash.
  *
+ * @returns The NFC-normalized password, for the steps that follow.
  * @throws AppError `password.*` (422) with every failed rule in `details.errors`.
  */
-export async function assess(
-  deps: Pick<Container, 'breachChecker'>,
-  password: string,
-  userInfo: PasswordUserInfo = {}
-): Promise<void> {
+export function checkPolicy(password: string, userInfo: PasswordUserInfo = {}): string {
   const normalized = normalizePassword(password)
   const failed = evaluatePassword(PASSWORD_POLICY, normalized, userInfo).checks.filter(
     (check) => !check.passed
@@ -96,12 +117,39 @@ export async function assess(
       errors: failed.map(fieldError),
     })
   }
+  return normalized
+}
+
+/**
+ * Refuses a password that appears in a known breach, inside the breach limiter. A lookup that
+ * cannot be made lets the password through.
+ *
+ * @throws AppError `password.breached` (422), or `server.unavailable` (503) when the limiter is
+ *   full.
+ */
+export async function checkBreach(
+  deps: Pick<Container, 'breachChecker' | 'limits'>,
+  normalized: string
+): Promise<void> {
   if (
     PASSWORD_POLICY.breachCheck === 'block' &&
-    (await deps.breachChecker.check(normalized)) === 'breached'
+    (await limited(deps.limits.breach, () => deps.breachChecker.check(normalized))) === 'breached'
   ) {
     throw fail(AUTH_ERRORS['password.breached'], {
       errors: [{ field: 'password', code: 'password.breached' }],
     })
   }
+}
+
+/**
+ * Refuses a password that breaks the policy or appears in a known breach.
+ *
+ * @throws AppError `password.*` (422) with every failed rule in `details.errors`.
+ */
+export async function assess(
+  deps: Pick<Container, 'breachChecker' | 'limits'>,
+  password: string,
+  userInfo: PasswordUserInfo = {}
+): Promise<void> {
+  await checkBreach(deps, checkPolicy(password, userInfo))
 }

@@ -16,6 +16,10 @@ test('configuration falls back to defaults for everything but the environment', 
     RETENTION_INTERVAL_MS: 600_000,
     RETENTION_BATCH_SIZE: 500,
     RETENTION_RUN_TIMEOUT_MS: 30_000,
+    HASH_CONCURRENCY: 4,
+    HASH_QUEUE: 16,
+    BREACH_CHECK_CONCURRENCY: 8,
+    BREACH_CHECK_QUEUE: 16,
   })
 })
 
@@ -37,6 +41,10 @@ test.each([
   ['a purge interval of zero', { RETENTION_INTERVAL_MS: '0' }],
   ['a purge batch above 5000', { RETENTION_BATCH_SIZE: '5001' }],
   ['a purge run timeout of zero', { RETENTION_RUN_TIMEOUT_MS: '0' }],
+  ['no hash slots', { HASH_CONCURRENCY: '0' }],
+  ['a negative hash queue', { HASH_QUEUE: '-1' }],
+  ['no breach lookup slots', { BREACH_CHECK_CONCURRENCY: '0' }],
+  ['a breach queue above 1000', { BREACH_CHECK_QUEUE: '1001' }],
 ])('configuration rejects %s at boot', (_name, source) => {
   expect(() => loadEnv({ ENVIRONMENT: 'local', REGION: 'us', ...source })).toThrow()
 })

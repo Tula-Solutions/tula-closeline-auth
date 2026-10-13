@@ -24,6 +24,7 @@ import { createUnconfiguredMailer } from '~/adapters/unconfigured/mailer'
 import { describeError } from '~/describe-error'
 import { databaseUrl, type Env, loadEnv, masterKey } from '~/env'
 import { SERVICE } from '~/info'
+import { createWorkLimits, type WorkLimits } from '~/lib/concurrency'
 import { createKeyedHash, type KeyedHash } from '~/lib/keyed-hash'
 import { createSecretBox, type SecretBox } from '~/lib/secret-box'
 import type { BreachChecker } from '~/ports/breach-checker'
@@ -105,6 +106,8 @@ export type Container = {
   lockout: Lockout
   /** Lets work that must not run on two instances at once take turns (the purge). */
   exclusive: ExclusiveRunner
+  /** Bounds on password hashing and the breach lookup, so one instance cannot be flooded. */
+  limits: WorkLimits
   /** Whether a password appears in known breaches. */
   breachChecker: BreachChecker
   /** Releases what the container holds (database connections); call once on shutdown. */
@@ -185,6 +188,7 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     rateLimiter: new MemoryRateLimiter(systemClock),
     lockout: new MemoryLockout(systemClock),
     exclusive: createPostgresExclusiveRunner(database.db),
+    limits: createWorkLimits(env),
     breachChecker: new HibpBreachChecker({ logger }),
     close: database.close,
     reportError: (error, context) => {

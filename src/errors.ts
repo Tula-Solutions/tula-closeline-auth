@@ -1,4 +1,4 @@
-import { defineErrors, type ErrorDefinition } from 'tula-closeline-contract'
+import { defineErrors, ERRORS, type ErrorDefinition } from 'tula-closeline-contract'
 import { AppError } from 'tula-closeline-kit'
 
 /** The service's own errors, as `area.reason` codes with their HTTP status and default message. */
@@ -76,3 +76,23 @@ export function fail(
 export function rateLimited(definition: ErrorDefinition, retryAfterMs: number): AppError {
   return fail(definition, { retryAfter: Math.max(1, Math.ceil(retryAfterMs / 1000)) })
 }
+
+/**
+ * The 503 an instance answers with when it is shedding load (a work limiter is full). It is its
+ * own class so the error handler can tell it from a real fault: shedding is not reported to the
+ * error tracker, or a flood would also flood the tracker.
+ */
+export class Overloaded extends AppError {
+  constructor() {
+    super({
+      code: ERRORS['server.unavailable'].code,
+      status: ERRORS['server.unavailable'].status,
+      message: ERRORS['server.unavailable'].message,
+      details: { retryAfter: OVERLOAD_RETRY_AFTER_SECONDS },
+    })
+    this.name = 'Overloaded'
+  }
+}
+
+/** Seconds a client is told to wait after a shed request. */
+export const OVERLOAD_RETRY_AFTER_SECONDS = 1
