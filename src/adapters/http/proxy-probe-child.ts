@@ -24,9 +24,9 @@ const adapter = createHttpMembership({
 async function step(name: string, run: () => Promise<unknown>): Promise<void> {
   try {
     await run()
-    process.stdout.write(`${name} ok` + '\n')
+    process.stdout.write(`${name} ok\n`)
   } catch (error) {
-    process.stdout.write(`${name} error ${error instanceof Error ? error.name : 'unknown'}` + '\n')
+    process.stdout.write(`${name} error ${error instanceof Error ? error.name : 'unknown'}\n`)
   }
 }
 
