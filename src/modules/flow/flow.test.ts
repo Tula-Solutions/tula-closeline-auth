@@ -588,6 +588,72 @@ describe('text the database cannot store', () => {
     expect(reply.body).toMatchObject({ error: { code: 'request.invalid' } })
     expect(deps.reported).toHaveLength(0)
   })
+
+  test.each([
+    ['sign-in identifier', '/v1/client/sign-ins', { identifier: 'maya\ud800@northline.app' }],
+    [
+      'sign-up email',
+      '/v1/client/sign-ups',
+      { email: 'maya\udc00@northline.app', password: PASSWORD, organizationName: 'Northline' },
+    ],
+    [
+      'first name',
+      '/v1/client/sign-ups',
+      {
+        email: 'a@northline.app',
+        password: PASSWORD,
+        firstName: '\ud800',
+        organizationName: 'Northline',
+      },
+    ],
+    [
+      'last name',
+      '/v1/client/sign-ups',
+      {
+        email: 'a@northline.app',
+        password: PASSWORD,
+        lastName: 'Pa\ud83dtel',
+        organizationName: 'Northline',
+      },
+    ],
+    [
+      'organization name',
+      '/v1/client/sign-ups',
+      { email: 'a@northline.app', password: PASSWORD, organizationName: 'North\udfffline' },
+    ],
+    [
+      'invitation token',
+      '/v1/client/sign-ups',
+      { email: 'a@northline.app', password: PASSWORD, invitationToken: 'inv\ud800-1' },
+    ],
+  ])(
+    'an unpaired surrogate in the %s is a 400 and nothing is reported or kept',
+    async (_field, path, body) => {
+      const { deps, app } = await setup()
+
+      const reply = await call(app, 'POST', path, { body })
+
+      expect(reply.status).toBe(400)
+      expect(reply.body).toMatchObject({ error: { code: 'request.invalid' } })
+      expect(deps.reported).toHaveLength(0)
+      expect(deps.mailer.outbox).toHaveLength(0)
+    }
+  )
+
+  test('a paired surrogate (an emoji) is ordinary text and is accepted', async () => {
+    const { app } = await setup()
+
+    const reply = await call(app, 'POST', '/v1/client/sign-ups', {
+      body: {
+        email: 'emoji@northline.app',
+        password: PASSWORD,
+        firstName: 'Maya \u{1F600}',
+        organizationName: 'North\u{1F600}line',
+      },
+    })
+
+    expect(reply.status).toBe(200)
+  })
 })
 
 describe('what a sign-up costs before it is allowed', () => {

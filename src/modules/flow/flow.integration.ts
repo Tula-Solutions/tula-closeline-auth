@@ -117,6 +117,53 @@ describe('sign-up against a real Postgres', () => {
   })
 })
 
+describe('text Postgres refuses, over a real Postgres', () => {
+  test('an unpaired surrogate in a name is a 400 that reports nothing and keeps no attempt', async () => {
+    const app = createApp(deps)
+    const reportedBefore = deps.reported.length
+    const [before] = await rows(sql`select count(*)::int as n from auth.flow_attempts`)
+
+    const reply = await call(app, 'POST', '/v1/client/sign-ups', {
+      body: {
+        email: 'lone@northline.app',
+        password: PASSWORD,
+        firstName: '\ud800',
+        organizationName: 'Northline',
+      },
+    })
+
+    expect(reply.status).toBe(400)
+    expect(deps.reported).toHaveLength(reportedBefore)
+    const [after] = await rows(sql`select count(*)::int as n from auth.flow_attempts`)
+    expect(after?.n).toBe(before?.n)
+  })
+
+  test('a paired surrogate (an emoji) in the names is stored and signs up', async () => {
+    const app = createApp(deps)
+    const started = await call(app, 'POST', '/v1/client/sign-ups', {
+      body: {
+        email: 'emoji@northline.app',
+        password: PASSWORD,
+        firstName: 'Maya \u{1F600}',
+        organizationName: 'North\u{1F600}line',
+      },
+    })
+
+    const done = await call(
+      app,
+      'POST',
+      `/v1/client/sign-ups/${text(started.body, 'id')}/verify-email`,
+      {
+        attempt: text(started.body, 'attemptSecret'),
+        body: { code: emailedCode(deps, 'emoji@northline.app') },
+      }
+    )
+
+    expect(started.status).toBe(200)
+    expect(done.status).toBe(200)
+  })
+})
+
 function emailedCodeFor(_started: unknown): string {
   // The first attempt's code is the first email sent to the address.
   const message = deps.mailer.outbox.find((m) => m.to === 'four@northline.app')

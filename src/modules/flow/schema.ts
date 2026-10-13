@@ -21,14 +21,19 @@ export const ATTEMPT_SECRET_PREFIX = 'tula_at_'
 /** The kinds of client that hold a session. */
 export const clientSchema = z.enum(['web', 'ios', 'android', 'server'])
 
+/** A high surrogate with no low one after it, or a low one with no high one before it. */
+const UNPAIRED_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/
+
 /**
- * Whether a free-text value can be stored: Postgres text and jsonb refuse a NUL character, which
+ * Whether a free-text value can be stored: Postgres text and jsonb refuse a NUL character, and
+ * jsonb refuses an unpaired surrogate (which `JSON.parse` accepts as an escape), either of which
  * would otherwise surface as an unexpected 500 from a route anyone can call.
  */
-export const hasNoNul = (value: string): boolean => !value.includes('\u0000')
+export const isStorable = (value: string): boolean =>
+  !value.includes('\u0000') && !UNPAIRED_SURROGATE.test(value)
 
-/** The validation message for {@link hasNoNul}. */
-export const NO_NUL_MESSAGE = 'Must not contain a NUL character.'
+/** The validation message for {@link isStorable}. */
+export const UNSTORABLE_MESSAGE = 'Must not contain a NUL character or an unpaired surrogate.'
 
 /** What a sign-up request is: a person, and exactly one way to get an Organization. */
 export const signUpRequestSchema = z
@@ -37,24 +42,24 @@ export const signUpRequestSchema = z
       .string()
       .min(1)
       .max(320)
-      .refine(hasNoNul, NO_NUL_MESSAGE)
+      .refine(isStorable, UNSTORABLE_MESSAGE)
       .openapi({ example: 'maya@northline.app' }),
     password: z.string().min(1).max(16_384),
-    firstName: z.string().trim().max(100).refine(hasNoNul, NO_NUL_MESSAGE).optional(),
-    lastName: z.string().trim().max(100).refine(hasNoNul, NO_NUL_MESSAGE).optional(),
+    firstName: z.string().trim().max(100).refine(isStorable, UNSTORABLE_MESSAGE).optional(),
+    lastName: z.string().trim().max(100).refine(isStorable, UNSTORABLE_MESSAGE).optional(),
     organizationName: z
       .string()
       .trim()
       .min(1)
       .max(120)
-      .refine(hasNoNul, NO_NUL_MESSAGE)
+      .refine(isStorable, UNSTORABLE_MESSAGE)
       .optional()
       .openapi({ description: 'Creates this Organization with the new user as its Owner.' }),
     invitationToken: z
       .string()
       .min(1)
       .max(512)
-      .refine(hasNoNul, NO_NUL_MESSAGE)
+      .refine(isStorable, UNSTORABLE_MESSAGE)
       .optional()
       .openapi({ description: 'Joins the Organization that issued this invitation.' }),
   })
@@ -74,7 +79,7 @@ export const verifyEmailRequestSchema = z
 
 /** Starting a sign-in names the account; whether it exists is not looked at yet. */
 export const signInRequestSchema = z
-  .strictObject({ identifier: z.string().min(1).max(320).refine(hasNoNul, NO_NUL_MESSAGE) })
+  .strictObject({ identifier: z.string().min(1).max(320).refine(isStorable, UNSTORABLE_MESSAGE) })
   .openapi('SignInRequest')
 
 /** The password step of a sign-in. */
