@@ -74,6 +74,14 @@ The shape in `.claude/COMMON.md` is built; modules are under `src/modules/<name>
 `POST /v1/client/sessions/sign-out`, `GET /v1/client/sessions`, `GET /v1/client/me`. An attempt's
 secret travels in `x-tula-attempt`; the client kind in `x-tula-client`.
 
+## Browser sessions (refresh cookie, hub issue 41)
+
+`x-tula-client: browser` (stored as session client `web`) gets the refresh token in the cookie
+`__Secure-tula_refresh` (HttpOnly, Secure, SameSite=Strict, `Path=/v1/client/sessions/`), never in
+the body; refresh and sign-out read only the cookie, after an `Origin` allow-list check. Every
+other client type is unchanged. Rules: `.claude/rules/session.md`. The known-device cookie waits for
+the lockout change (hub issue 30), where its verification lives.
+
 ## Accounts and Organizations
 
 A user belongs to exactly one Organization. A sign-up carries exactly one of `organizationName`
@@ -99,18 +107,8 @@ open ticket on reconciling Organizations whose account was never written: `.clau
 
 ## Retention
 
-Sign-in data is short-lived (an attempt and a code live 10 minutes), and an abandoned sign-up
-holds an argon2id hash, the Organization name and a sealed invitation, so they must not be kept.
-`modules/retention` deletes attempts (and, by cascade, their codes) and then codes whose `expiresAt`
-has passed, `RETENTION_BATCH_SIZE` rows per statement, repeating while a batch comes back full. It
-runs at boot (not awaited) and every `RETENTION_INTERVAL_MS`, each run under a Postgres advisory
-lock (`ExclusiveRunner`, so only one instance purges at a time and the others skip) and bounded by
-`RETENTION_RUN_TIMEOUT_MS`. A failed or timed-out run is logged and reported to the error tracker
-(no row data) and the next interval tries again. Only rows expired for more than 10 s (twice the
-5 s bound on a call to core) are purged, so a sign-up that is waiting on core is never purged
-before it spends its code. It needs 2 connections at once, so `DB_POOL_MAX` is at least 4.
-Shutdown stops it before the pool closes. Sessions, refresh tokens and signing keys are not purged
-by this service yet.
+The purge of expired attempts and codes (`modules/retention`) and its rules: `.claude/rules/retention.md`.
+Sessions, refresh tokens and signing keys are not purged yet.
 
 ## Env keys (`src/env.ts`, mirrored in `.env.example`)
 
@@ -122,7 +120,9 @@ and `CORE_INTERNAL_TOKEN` (32+ characters, never logged) (all five required outs
 `TOKEN_AUDIENCE` (default `closeline`), `DB_POOL_MAX` (default 10, at least 4),
 `RETENTION_INTERVAL_MS`, `RETENTION_BATCH_SIZE`, `RETENTION_RUN_TIMEOUT_MS`, `HASH_CONCURRENCY`,
 `HASH_QUEUE`, `SIGN_IN_CONCURRENCY`, `SIGN_IN_QUEUE`, `BREACH_CHECK_CONCURRENCY`,
-`BREACH_CHECK_QUEUE`, `MAIL_LOCAL_URL`, `MAIL_LOCAL_FROM` (local only). Add a key in both files.
+`BREACH_CHECK_QUEUE`, `MAIL_LOCAL_URL`, `MAIL_LOCAL_FROM` (local only), `SESSION_ALLOWED_ORIGINS` (exact, distinct origins,
+comma-separated, https outside `local`, no wildcard; required outside `local`),
+`SESSION_COOKIE_INSECURE` (`true` only in `local`). Add a key in both files.
 
 ## Tests
 

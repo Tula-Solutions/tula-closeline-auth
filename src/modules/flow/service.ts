@@ -57,6 +57,8 @@ type State = z.infer<typeof stateSchema>
 /** What the HTTP layer tells a flow about the request. */
 export type ClientContext = {
   client: SessionClient
+  /** The `browser` client type: the refresh token goes in a cookie, not the body. */
+  cookie?: boolean
   /** Reports a failure that is the deployment's to fix (e.g. an account with no Organization). */
   report: (error: unknown, status: number) => void
 }

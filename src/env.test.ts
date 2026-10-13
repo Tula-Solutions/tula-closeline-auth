@@ -1,5 +1,13 @@
 import { describe, expect, test } from 'bun:test'
-import { databaseUrl, LOCAL_MASTER_KEY, loadEnv, masterKey, publicUrl } from './env'
+import {
+  allowedOrigins,
+  databaseUrl,
+  LOCAL_MASTER_KEY,
+  loadEnv,
+  masterKey,
+  publicUrl,
+  sessionCookieInsecure,
+} from './env'
 
 test('configuration falls back to defaults for everything but the environment', () => {
   expect(loadEnv({ ENVIRONMENT: 'local', REGION: 'us' })).toEqual({
@@ -96,6 +104,7 @@ const DEPLOYED = {
   PUBLIC_URL: 'https://auth.eu.example.com/',
   CORE_BASE_URL: 'https://core.eu.internal.example.com',
   CORE_INTERNAL_TOKEN: 'c'.repeat(32),
+  SESSION_ALLOWED_ORIGINS: 'https://app.example.com',
 }
 
 test('a deploy outside local boots with everything set', () => {
@@ -297,4 +306,150 @@ describe('the local mail settings', () => {
     expect(text).not.toContain('9d2')
     expect(text).not.toContain('evil')
   })
+})
+
+describe('the browser session settings', () => {
+  const deployed = {
+    ENVIRONMENT: 'prod',
+    REGION: 'us',
+    DATABASE_URL: 'postgres://u:p@db.example.com/closeline',
+    AUTH_MASTER_KEY: 'ab'.repeat(32),
+    PUBLIC_URL: 'https://auth.example.com',
+    CORE_BASE_URL: 'https://core.example.com',
+    CORE_INTERNAL_TOKEN: 'x'.repeat(40),
+    SESSION_ALLOWED_ORIGINS: 'https://app.example.com',
+  }
+
+  test('both are unset by default: secure cookie, and no origin is allowed', () => {
+    const env = loadEnv({ ENVIRONMENT: 'local', REGION: 'us' })
+
+    expect(env.SESSION_COOKIE_INSECURE).toBeUndefined()
+    expect(env.SESSION_ALLOWED_ORIGINS).toBeUndefined()
+    expect(sessionCookieInsecure(env)).toBe(false)
+    expect(allowedOrigins(env)).toEqual([])
+  })
+
+  test('the insecure cookie is accepted in local only', () => {
+    expect(
+      sessionCookieInsecure(
+        loadEnv({ ENVIRONMENT: 'local', REGION: 'us', SESSION_COOKIE_INSECURE: 'true' })
+      )
+    ).toBe(true)
+    for (const environment of ['dev', 'staging', 'prod']) {
+      expect(() =>
+        loadEnv({ ...deployed, ENVIRONMENT: environment, SESSION_COOKIE_INSECURE: 'true' })
+      ).toThrow(/SESSION_COOKIE_INSECURE/)
+      expect(
+        sessionCookieInsecure(
+          loadEnv({ ...deployed, ENVIRONMENT: environment, SESSION_COOKIE_INSECURE: 'false' })
+        )
+      ).toBe(false)
+    }
+  })
+
+  test.each(['yes', '1', 'TRUE', ''])('the insecure cookie refuses %p', (value) => {
+    expect(() =>
+      loadEnv({ ENVIRONMENT: 'local', REGION: 'us', SESSION_COOKIE_INSECURE: value })
+    ).toThrow(/SESSION_COOKIE_INSECURE/)
+  })
+
+  test('allowed origins are a list of exact https origins', () => {
+    const env = loadEnv({
+      ...deployed,
+      SESSION_ALLOWED_ORIGINS: 'https://app.example.com, https://portal.example.com:8443',
+    })
+
+    expect(allowedOrigins(env)).toEqual([
+      'https://app.example.com',
+      'https://portal.example.com:8443',
+    ])
+  })
+
+  test.each([['dev'], ['staging'], ['prod']])('%s refuses an http origin', (environment) => {
+    expect(() =>
+      loadEnv({
+        ...deployed,
+        ENVIRONMENT: environment,
+        SESSION_ALLOWED_ORIGINS: 'http://app.example.com',
+      })
+    ).toThrow(/SESSION_ALLOWED_ORIGINS/)
+  })
+
+  test('local accepts http and https origins', () => {
+    const env = loadEnv({
+      ENVIRONMENT: 'local',
+      REGION: 'us',
+      SESSION_ALLOWED_ORIGINS: 'http://localhost:5173,https://localhost:5174',
+    })
+
+    expect(allowedOrigins(env)).toEqual(['http://localhost:5173', 'https://localhost:5174'])
+  })
+
+  test.each([
+    ['a bare wildcard', '*'],
+    ['a wildcard subdomain', 'https://*.example.com'],
+    ['a wildcard among others', 'https://app.example.com,*'],
+    ['null', 'null'],
+    ['a trailing slash', 'https://app.example.com/'],
+    ['a path', 'https://app.example.com/portal'],
+    ['a query', 'https://app.example.com?x=1'],
+    ['credentials', 'https://user:pass@app.example.com'],
+    ['no scheme', 'app.example.com'],
+    ['another scheme', 'ftp://app.example.com'],
+    ['an empty entry', 'https://app.example.com,,https://b.example.com'],
+    ['a blank value', ''],
+    ['an upper-case host', 'https://APP.example.com'],
+    ['the default port spelled out', 'https://app.example.com:443'],
+  ])('allowed origins refuse %s', (_name, value) => {
+    expect(() => loadEnv({ ...deployed, SESSION_ALLOWED_ORIGINS: value })).toThrow(
+      /SESSION_ALLOWED_ORIGINS/
+    )
+    expect(() =>
+      loadEnv({ ENVIRONMENT: 'local', REGION: 'us', SESSION_ALLOWED_ORIGINS: value })
+    ).toThrow(/SESSION_ALLOWED_ORIGINS/)
+  })
+
+  test('the error names the key and never echoes the value', () => {
+    let message = ''
+    try {
+      loadEnv({ ...deployed, SESSION_ALLOWED_ORIGINS: 'http://secret-host.example.com' })
+    } catch (error) {
+      message = String(error)
+    }
+
+    expect(message).toContain('SESSION_ALLOWED_ORIGINS')
+    expect(message).not.toContain('secret-host')
+  })
+
+  test('more than twenty origins are refused', () => {
+    const many = Array.from({ length: 21 }, (_, i) => `https://a${i}.example.com`).join(',')
+
+    expect(() => loadEnv({ ...deployed, SESSION_ALLOWED_ORIGINS: many })).toThrow(
+      /SESSION_ALLOWED_ORIGINS/
+    )
+  })
+
+  test('duplicate origins are refused', () => {
+    for (const value of [
+      'https://app.example.com,https://app.example.com',
+      'https://app.example.com, https://app.example.com',
+    ]) {
+      expect(() => loadEnv({ ...deployed, SESSION_ALLOWED_ORIGINS: value })).toThrow(
+        /SESSION_ALLOWED_ORIGINS/
+      )
+    }
+  })
+
+  test.each(['dev', 'staging', 'prod'])(
+    '%s refuses to boot with no allowed origin',
+    (environment) => {
+      const { SESSION_ALLOWED_ORIGINS: _unset, ...without } = deployed
+      expect(() => loadEnv({ ...without, ENVIRONMENT: environment })).toThrow(
+        /SESSION_ALLOWED_ORIGINS/
+      )
+      expect(() =>
+        loadEnv({ ...without, ENVIRONMENT: environment, SESSION_ALLOWED_ORIGINS: '' })
+      ).toThrow(/SESSION_ALLOWED_ORIGINS/)
+    }
+  )
 })

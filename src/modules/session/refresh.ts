@@ -164,7 +164,13 @@ export async function refresh(
       }
       // The first response may have been lost: the same next token is returned.
       const access = await sign(tokenSession, membership, now)
-      return issued(session.id, access, await deriveToken(deps, { parentId: token.id }), membership)
+      return issued(
+        session.id,
+        access,
+        await deriveToken(deps, { parentId: token.id }),
+        membership,
+        session.absoluteExpiresAt
+      )
     }
 
     // The token and the session may have run out while core was being asked; the rotation's
@@ -192,7 +198,13 @@ export async function refresh(
       idleExpiresAt,
     })
     if (rotated) {
-      return issued(session.id, await sign(tokenSession, membership, now), child, membership)
+      return issued(
+        session.id,
+        await sign(tokenSession, membership, now),
+        child,
+        membership,
+        session.absoluteExpiresAt
+      )
     }
     // Lost a race with another refresh of the same token: look again, it is now a replay (the
     // answer from core is kept).

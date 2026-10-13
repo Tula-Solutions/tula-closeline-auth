@@ -10,6 +10,8 @@ export type CallOptions = {
   /** A bearer access token. */
   accessToken?: string
   client?: string
+  /** Any other request headers, e.g. `origin` or `cookie`; they win over the ones above. */
+  headers?: Record<string, string>
 }
 
 /** A response with its JSON body parsed (or `null`). */
@@ -39,6 +41,7 @@ export async function call(
   if (options.client !== undefined) {
     headers['x-tula-client'] = options.client
   }
+  Object.assign(headers, options.headers)
   const response = await app.request(path, {
     method,
     headers,
