@@ -122,7 +122,7 @@ and `CORE_INTERNAL_TOKEN` (32+ characters, never logged) (all five required outs
 `TOKEN_AUDIENCE` (default `closeline`), `DB_POOL_MAX` (default 10, at least 4),
 `RETENTION_INTERVAL_MS`, `RETENTION_BATCH_SIZE`, `RETENTION_RUN_TIMEOUT_MS`, `HASH_CONCURRENCY`,
 `HASH_QUEUE`, `SIGN_IN_CONCURRENCY`, `SIGN_IN_QUEUE`, `BREACH_CHECK_CONCURRENCY`,
-`BREACH_CHECK_QUEUE`. Add a key in both files.
+`BREACH_CHECK_QUEUE`, `MAIL_LOCAL_URL`, `MAIL_LOCAL_FROM` (local only). Add a key in both files.
 
 ## Tests
 
@@ -156,7 +156,8 @@ scenarios against real Postgres as the `closeline_auth` role (`POSTGRES_PORT` mo
   quiet. Inherited from the source design; `flow.test.ts` pins it as a known limitation. A
   follow-up ticket decides the redesign (e.g. key on address plus a device cookie, or exempt a
   known-good device).
-- No mail provider: the runtime mailer fails with `mail.unavailable`. Tests use the memory mailer.
+- No production mail provider (hub issue #35): the mailer fails with `mail.unavailable`. Only in
+  `local`, `MAIL_LOCAL_URL` selects a Mailpit mailbox adapter: `.claude/rules/mail.md`.
 - **Deployment prerequisite: a per-source rate limit at the edge.** The service has no per-IP
   limit on sign-up and sign-in starts (it needs a trusted-proxy decision), so it must not be
   exposed to the internet until the edge (load balancer or WAF) limits requests per source;

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { formatId } from 'tula-closeline-contract'
+import { MailerNotConfigured } from '~/adapters/unconfigured/mailer'
 import { startFakeCore } from '~/testing/fake-core'
 import { createContainer, createMembership, reportSafely } from './container'
 import { type Env, loadEnv } from './env'
@@ -224,6 +225,86 @@ describe('which membership adapter the container builds', () => {
       expect(core.requests).toHaveLength(1)
     } finally {
       await core.stop()
+    }
+  })
+})
+
+describe('the mailer', () => {
+  const MESSAGE = { to: 'rep@example.com', subject: 'Hello', text: 'text', html: '<p>html</p>' }
+
+  test('without MAIL_LOCAL_URL the unconfigured mailer stays', async () => {
+    const container = createContainer(
+      loadEnv({ ENVIRONMENT: 'local', REGION: 'us', LOG_LEVEL: 'silent' })
+    )
+
+    await expect(container.mailer.send(MESSAGE)).rejects.toBeInstanceOf(MailerNotConfigured)
+  })
+
+  test('with MAIL_LOCAL_URL the local mailbox adapter hands the message over', async () => {
+    const bodies: unknown[] = []
+    const mailbox = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      async fetch(request) {
+        bodies.push({ path: new URL(request.url).pathname, body: await request.json() })
+        return Response.json({ ID: 'x' })
+      },
+    })
+    try {
+      const container = createContainer(
+        loadEnv({
+          ENVIRONMENT: 'local',
+          REGION: 'us',
+          LOG_LEVEL: 'silent',
+          MAIL_LOCAL_URL: `http://127.0.0.1:${mailbox.port}`,
+        })
+      )
+
+      await container.mailer.send(MESSAGE)
+
+      expect(bodies).toEqual([
+        {
+          path: '/api/v1/send',
+          body: {
+            From: { Email: 'no-reply@closeline.test' },
+            To: [{ Email: 'rep@example.com' }],
+            Subject: 'Hello',
+            Text: 'text',
+            HTML: '<p>html</p>',
+          },
+        },
+      ])
+    } finally {
+      await mailbox.stop(true)
+    }
+  })
+
+  test('MAIL_LOCAL_FROM changes the sender', async () => {
+    const froms: unknown[] = []
+    const mailbox = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      async fetch(request) {
+        froms.push(((await request.json()) as { From: unknown }).From)
+        return Response.json({ ID: 'x' })
+      },
+    })
+    try {
+      const container = createContainer(
+        loadEnv({
+          ENVIRONMENT: 'local',
+          REGION: 'us',
+          LOG_LEVEL: 'silent',
+          MAIL_LOCAL_URL: `http://127.0.0.1:${mailbox.port}`,
+          MAIL_LOCAL_FROM: 'sender@dev.test',
+        })
+      )
+
+      await container.mailer.send(MESSAGE)
+
+      expect(froms).toEqual([{ Email: 'sender@dev.test' }])
+    } finally {
+      await mailbox.stop(true)
     }
   })
 })

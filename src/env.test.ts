@@ -177,3 +177,99 @@ describe('the core service settings', () => {
     expect(message).not.toContain('Sup3rSecret')
   })
 })
+
+describe('the local mail settings', () => {
+  const LOCAL = { ENVIRONMENT: 'local', REGION: 'us' }
+  const message = (source: Record<string, string | undefined>) => {
+    try {
+      loadEnv(source)
+    } catch (error) {
+      return String(error instanceof Error ? error.message : error)
+    }
+    return ''
+  }
+
+  test.each([
+    'http://127.0.0.1:8025',
+    'http://127.0.0.1:8025/',
+    'http://localhost:8025',
+    'http://[::1]:8025',
+    'http://LOCALHOST',
+  ])('local accepts the mailbox at %s', (url) => {
+    expect(loadEnv({ ...LOCAL, MAIL_LOCAL_URL: url }).MAIL_LOCAL_URL).toBe(url)
+  })
+
+  test('local runs with neither mail setting, and accepts a sender under .test', () => {
+    const env = loadEnv(LOCAL)
+
+    expect(env.MAIL_LOCAL_URL).toBeUndefined()
+    expect(env.MAIL_LOCAL_FROM).toBeUndefined()
+    expect(
+      loadEnv({ ...LOCAL, MAIL_LOCAL_URL: 'http://127.0.0.1:8025', MAIL_LOCAL_FROM: 'a@b.test' })
+        .MAIL_LOCAL_FROM
+    ).toBe('a@b.test')
+  })
+
+  test.each([
+    ['a non-loopback host', 'http://mail.example.com:8025'],
+    ['a private address', 'http://192.168.1.5:8025'],
+    ['a public address', 'http://8.8.8.8:8025'],
+    ['a host that only starts like localhost', 'http://localhost.evil.example:8025'],
+    ['a host hidden behind credentials', 'http://127.0.0.1@evil.example:8025'],
+    ['https', 'https://127.0.0.1:8025'],
+    ['another scheme', 'ftp://127.0.0.1'],
+    ['credentials', 'http://user:pw@127.0.0.1:8025'],
+    ['a username alone', 'http://user@127.0.0.1:8025'],
+    ['a path', 'http://127.0.0.1:8025/api'],
+    ['a trailing path after a slash', 'http://127.0.0.1:8025//'],
+    ['a query', 'http://127.0.0.1:8025/?a=1'],
+    ['an empty query', 'http://127.0.0.1:8025?'],
+    ['a fragment', 'http://127.0.0.1:8025/#x'],
+    ['no URL at all', 'not a url'],
+    ['an empty value', ''],
+  ])('local refuses %s', (_name, url) => {
+    expect(() => loadEnv({ ...LOCAL, MAIL_LOCAL_URL: url })).toThrow(/MAIL_LOCAL_URL/)
+  })
+
+  test.each(['dev', 'staging', 'prod'])(
+    '%s refuses the setting even for a loopback address',
+    (environment) => {
+      const source = { ...DEPLOYED, ENVIRONMENT: environment }
+
+      expect(() => loadEnv({ ...source, MAIL_LOCAL_URL: 'http://127.0.0.1:8025' })).toThrow(
+        /MAIL_LOCAL_URL/
+      )
+      expect(() => loadEnv({ ...source, MAIL_LOCAL_FROM: 'a@b.test' })).toThrow(/MAIL_LOCAL_FROM/)
+    }
+  )
+
+  test('a deploy outside local still boots without the settings', () => {
+    expect(loadEnv(DEPLOYED).MAIL_LOCAL_URL).toBeUndefined()
+  })
+
+  test.each([
+    ['a sender that is not an address', 'not-an-address'],
+    ['a sender with a display name', 'Closeline <a@b.test>'],
+  ])('local refuses %s', (_name, from) => {
+    expect(() =>
+      loadEnv({ ...LOCAL, MAIL_LOCAL_URL: 'http://127.0.0.1:8025', MAIL_LOCAL_FROM: from })
+    ).toThrow(/MAIL_LOCAL_FROM/)
+  })
+
+  test.each([
+    [
+      'a host that is refused',
+      { ENVIRONMENT: 'local', MAIL_LOCAL_URL: 'http://token-9d2@evil.example:8025' },
+    ],
+    [
+      'a deployment that is refused',
+      { ...DEPLOYED, MAIL_LOCAL_URL: 'http://secret-host-9d2.example:8025' },
+    ],
+  ])('the message for %s does not print the value', (_name, extra) => {
+    const text = message({ REGION: 'us', ...extra })
+
+    expect(text).toContain('MAIL_LOCAL_URL')
+    expect(text).not.toContain('9d2')
+    expect(text).not.toContain('evil')
+  })
+})

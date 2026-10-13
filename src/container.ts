@@ -10,6 +10,7 @@ import {
 } from 'tula-closeline-kit'
 import { HibpBreachChecker } from '~/adapters/breach/hibp'
 import { createHttpMembership } from '~/adapters/http/membership'
+import { createMailpitMailer, DEFAULT_LOCAL_MAIL_FROM } from '~/adapters/mailpit/mailer'
 import { MemoryLockout } from '~/adapters/memory/lockout'
 import { MemoryRateLimiter } from '~/adapters/memory/rate-limiter'
 import { createPlaceholderMembership } from '~/adapters/placeholder/membership'
@@ -162,6 +163,22 @@ export function createMembership(env: Env, logger: Pick<Logger, 'warn'>): Member
   throw new Error('CORE_BASE_URL and CORE_INTERNAL_TOKEN are required outside local')
 }
 
+/**
+ * Chooses the mailer: the local mailbox adapter when `MAIL_LOCAL_URL` is set (`loadEnv` accepts
+ * it only in `local`, on a loopback address), otherwise the unconfigured one, which fails every
+ * send with `mail.unavailable`. The production provider is still undecided (hub issue #35).
+ */
+export function createMailer(env: Env, logger: Pick<Logger, 'warn'>): Mailer {
+  if (env.MAIL_LOCAL_URL !== undefined) {
+    return createMailpitMailer({
+      baseUrl: env.MAIL_LOCAL_URL,
+      from: env.MAIL_LOCAL_FROM ?? DEFAULT_LOCAL_MAIL_FROM,
+      logger,
+    })
+  }
+  return createUnconfiguredMailer()
+}
+
 /** The single composition root: the only place adapters and process-wide objects are constructed. */
 export function createContainer(env: Env = loadEnv(), options: ContainerOptions = {}): Container {
   const logger = createLogger({
@@ -209,8 +226,9 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     flowAttempts: new PostgresFlowAttemptStore(database.db),
     verificationTokens: new PostgresVerificationTokenStore(database.db),
     sessions: new PostgresSessionStore(database.db),
-    // No mail provider is chosen yet: sending fails with `mail.unavailable` until one is wired.
-    mailer: createUnconfiguredMailer(),
+    // The production mail provider is still undecided (hub issue #35): outside a local mailbox,
+    // sending fails with `mail.unavailable`.
+    mailer: createMailer(env, logger),
     rateLimiter: new MemoryRateLimiter(systemClock),
     lockout: new MemoryLockout(systemClock),
     exclusive: createPostgresExclusiveRunner(database.db),

@@ -4,6 +4,28 @@ import { z } from 'zod'
 /** The most grace plus drain may add up to, so an orchestrator's kill window is not outlasted. */
 const MAX_SHUTDOWN_TOTAL_MS = 60_000
 
+/** The hosts a local mailbox may be on. */
+const LOOPBACK_HOSTS: readonly string[] = ['127.0.0.1', '[::1]', 'localhost']
+
+/** Whether `value` is an `http` origin on a loopback host with nothing after the port. */
+function isLocalMailboxUrl(value: string): boolean {
+  if (value.includes('?') || value.includes('#')) {
+    return false
+  }
+  try {
+    const url = new URL(value)
+    return (
+      url.protocol === 'http:' &&
+      url.username === '' &&
+      url.password === '' &&
+      url.pathname === '/' &&
+      LOOPBACK_HOSTS.includes(url.hostname)
+    )
+  } catch {
+    return false
+  }
+}
+
 const schema = z
   .object({
     /** Which deployment this is. No default: a deploy that forgets it must fail at boot. */
@@ -94,8 +116,35 @@ const schema = z
       .max(512, 'CORE_INTERNAL_TOKEN must be at most 512 characters')
       .regex(/^[\x21-\x7e]+$/, 'CORE_INTERNAL_TOKEN must be printable characters with no spaces')
       .optional(),
+    /**
+     * Where a local mailbox (Mailpit) takes mail: `http` on a loopback host (`127.0.0.1`, `::1`
+     * or `localhost`), with no credentials, path, query or fragment. Accepted only when
+     * `ENVIRONMENT=local`. With it set, sign-up mail goes to that mailbox; without it the
+     * unconfigured mailer stays and sign-up answers `mail.unavailable`.
+     */
+    MAIL_LOCAL_URL: z.string().optional(),
+    /** The `From` address of local mail. Accepted only when `ENVIRONMENT=local`. */
+    MAIL_LOCAL_FROM: z.email().optional(),
   })
   .superRefine((env, ctx) => {
+    // Messages name the key and the rule, never the value: a URL can carry credentials.
+    for (const key of ['MAIL_LOCAL_URL', 'MAIL_LOCAL_FROM'] as const) {
+      if (env[key] !== undefined && env.ENVIRONMENT !== 'local') {
+        ctx.addIssue({
+          code: 'custom',
+          path: [key],
+          message: `${key} is accepted only when ENVIRONMENT is local`,
+        })
+      }
+    }
+    if (env.MAIL_LOCAL_URL !== undefined && !isLocalMailboxUrl(env.MAIL_LOCAL_URL)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['MAIL_LOCAL_URL'],
+        message:
+          'MAIL_LOCAL_URL must be an http address on 127.0.0.1, [::1] or localhost, with no credentials, path, query or fragment',
+      })
+    }
     if (env.ENVIRONMENT === 'local') {
       // Both or neither: half a configuration would quietly fall back to the placeholder.
       for (const [key, other] of [
