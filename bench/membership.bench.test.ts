@@ -25,6 +25,8 @@ test(`membership lookup: the best of ${BATCHES} batches of ${BATCH_REQUESTS} loo
   const adapter = createHttpMembership({ baseUrl: core.url, token: core.secret })
   const userId = formatId('usr', crypto.randomUUID())
   await adapter.createOrganization({
+    email: 'maya@northline.app',
+    memberName: null,
     userId,
     name: 'Northline',
     idempotencyKey: crypto.randomUUID(),

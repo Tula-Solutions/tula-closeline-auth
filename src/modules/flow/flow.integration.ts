@@ -106,6 +106,8 @@ describe('sign-up against a real Postgres', () => {
     const first = await signUp(email)
     deps.clock.advance('2m')
     const second = await signUp(email)
+    const madeBefore = deps.membership.organizations.length
+    const abandonedBefore = deps.membership.abandons.length
     // Both started before either had an account, so both are real attempts.
     const results = await Promise.all([
       first.verify(emailedCodeFor(first.started)),
@@ -114,6 +116,12 @@ describe('sign-up against a real Postgres', () => {
 
     expect(results.map((r) => r.status).sort()).toEqual([200, 409])
     expect(await countUsers(email)).toBe(1)
+    // Whichever way the loser lost (before core was asked, or at the insert), no Organization is
+    // left without an owner: every one made beyond the winner's was abandoned.
+    expect(deps.membership.abandons.length - abandonedBefore).toBe(
+      deps.membership.organizations.length - madeBefore - 1
+    )
+    expect(deps.reported.filter((r) => String(r.error).includes('reconcile'))).toHaveLength(0)
   })
 })
 

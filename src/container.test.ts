@@ -135,7 +135,13 @@ describe('which membership adapter the container builds', () => {
 
     expect(await membership.forUser(userId)).toBeNull()
     await expect(
-      membership.createOrganization({ userId, name: 'A', idempotencyKey: crypto.randomUUID() })
+      membership.createOrganization({
+        email: 'maya@northline.app',
+        memberName: null,
+        userId,
+        name: 'A',
+        idempotencyKey: crypto.randomUUID(),
+      })
     ).rejects.toThrow(/placeholder/)
   })
 
@@ -150,6 +156,8 @@ describe('which membership adapter the container builds', () => {
       })
 
       const created = await createMembership(env, quiet).createOrganization({
+        email: 'maya@northline.app',
+        memberName: null,
         userId,
         name: 'Northline',
         idempotencyKey: crypto.randomUUID(),

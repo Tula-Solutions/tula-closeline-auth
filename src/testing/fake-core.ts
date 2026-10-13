@@ -1,4 +1,5 @@
 import {
+  ABANDON_MAX_AGE_HOURS,
   CORE_ERRORS,
   type CoreErrorCode,
   ERRORS,
@@ -6,6 +7,8 @@ import {
   formatId,
   type InvitableRole,
   idempotencyKeySchema,
+  internalAbandonOrganizationParamsSchema,
+  internalAbandonOrganizationRequestSchema,
   internalAcceptInvitationRequestSchema,
   internalCreateOrganizationRequestSchema,
   internalMembershipRequestSchema,
@@ -52,6 +55,8 @@ export type FakeCore = {
   untilRequests: (count: number) => Promise<void>
   /** Resolves once at least `count` requests were abandoned by their client. */
   untilAbandoned: (count: number) => Promise<void>
+  /** Moves the fake's own clock forward, which the 24 hour abandon rule reads. */
+  advanceClock: (ms: number) => void
   /** Stops the server. */
   stop: () => Promise<void>
 }
@@ -104,6 +109,8 @@ export function startFakeCore(secret = 'fake-core-secret-0123456789abcdef-0123')
     string,
     { email: string; role: InvitableRole; organizationId: OrganizationId }
   >()
+  const created = new Map<string, number>()
+  let skewMs = 0
   const acceptedByKey = new Map<string, { organizationId: OrganizationId; role: Role }>()
   let broken = false
 
@@ -151,7 +158,8 @@ export function startFakeCore(secret = 'fake-core-secret-0123456789abcdef-0123')
 
     if (path === '/internal/organizations') {
       const parsed = internalCreateOrganizationRequestSchema.safeParse(body)
-      if (!parsed.success) {
+      // Like core: the contract leaves `email` optional, but a Membership cannot exist without one.
+      if (!parsed.success || parsed.data.email === undefined) {
         return coreError('request.invalid')
       }
       const existing = members.get(parsed.data.userId)
@@ -165,6 +173,7 @@ export function startFakeCore(secret = 'fake-core-secret-0123456789abcdef-0123')
         role: 'owner' as const,
       }
       members.set(parsed.data.userId, membership)
+      created.set(membership.organizationId, Date.now() + skewMs)
       return Response.json(membership)
     }
 
@@ -207,6 +216,36 @@ export function startFakeCore(secret = 'fake-core-secret-0123456789abcdef-0123')
           : { found: false }
       )
     }
+    const abandonPath = /^\/internal\/organizations\/([^/]+)\/abandon$/.exec(path)
+    if (abandonPath) {
+      const params = internalAbandonOrganizationParamsSchema.safeParse({
+        organizationId: abandonPath[1],
+      })
+      const parsed = internalAbandonOrganizationRequestSchema.safeParse(body)
+      if (!(params.success && parsed.success)) {
+        return coreError('request.invalid')
+      }
+      const { organizationId } = params.data
+      const here = [...members.entries()].filter(([, m]) => m.organizationId === organizationId)
+      const status = statuses.get(organizationId) ?? 'active'
+      if (here.length > 0 && status !== 'deleted') {
+        // Like core: one member, that user, and an Organization that is not suspended.
+        const born = created.get(organizationId)
+        const old =
+          born !== undefined && Date.now() + skewMs - born >= ABANDON_MAX_AGE_HOURS * 3_600_000
+        if (
+          here.length !== 1 ||
+          here[0]?.[0] !== parsed.data.userId ||
+          status === 'suspended' ||
+          old
+        ) {
+          return coreError('organization.not_abandonable')
+        }
+        members.delete(parsed.data.userId)
+        statuses.set(organizationId, 'deleted')
+      }
+      return Response.json({ organizationId, status: 'deleted' })
+    }
     return Response.json(
       { error: { code: 'request.not_found', message: 'No such route.' } },
       { status: 404 }
@@ -232,6 +271,9 @@ export function startFakeCore(secret = 'fake-core-secret-0123456789abcdef-0123')
     clearScript: () => void scripted.splice(0),
     untilRequests: (count) => arrived.until(count),
     untilAbandoned: (count) => abandoned.until(count),
+    advanceClock: (ms) => {
+      skewMs += ms
+    },
     stop: async () => {
       await server.stop(true)
     },

@@ -1,12 +1,14 @@
 import { expect, test } from 'bun:test'
 import { formatId } from 'tula-closeline-contract'
 import { membershipSuite } from '~/adapters/membership.suite'
+import { FixedClock } from '~/adapters/memory/clock'
 import { createMemoryMembership } from '~/adapters/memory/membership'
 import { createPlaceholderMembership } from '~/adapters/placeholder/membership'
 import { MembershipUnavailable } from '~/ports/membership'
 
 membershipSuite('memory', () => {
-  const adapter = createMemoryMembership()
+  const clock = new FixedClock()
+  const adapter = createMemoryMembership(clock)
   return {
     adapter,
     invite: (token, email) =>
@@ -17,6 +19,7 @@ membershipSuite('memory', () => {
       }),
     breakDown: adapter.breakDown,
     setStatus: adapter.setOrganizationStatus,
+    advance: (ms) => clock.advance(ms),
   }
 })
 
@@ -26,10 +29,17 @@ test('the placeholder never invents a membership: nobody has one and none can be
 
   expect(await placeholder.forUser(userId)).toBeNull()
   await expect(
-    placeholder.createOrganization({ userId, name: 'A', idempotencyKey: 'k' })
+    placeholder.createOrganization({
+      email: 'maya@northline.app',
+      memberName: null,
+      userId,
+      name: 'A',
+      idempotencyKey: 'k',
+    })
   ).rejects.toBeInstanceOf(MembershipUnavailable)
   await expect(
     placeholder.acceptInvitation({
+      memberName: null,
       userId,
       invitationToken: 't',
       email: 'a@b.co',
@@ -44,12 +54,21 @@ test('the memory adapter fails a call whose signal is already aborted, or aborts
   const aborted = AbortSignal.abort()
 
   await expect(
-    membership.createOrganization({ userId, name: 'A', idempotencyKey: 'k1', signal: aborted })
+    membership.createOrganization({
+      email: 'maya@northline.app',
+      memberName: null,
+      userId,
+      name: 'A',
+      idempotencyKey: 'k1',
+      signal: aborted,
+    })
   ).rejects.toBeInstanceOf(MembershipUnavailable)
   await expect(membership.forUser(userId, aborted)).rejects.toBeInstanceOf(MembershipUnavailable)
   const release = membership.hold()
   const controller = new AbortController()
   const held = membership.createOrganization({
+    email: 'maya@northline.app',
+    memberName: null,
     userId,
     name: 'A',
     idempotencyKey: 'k2',
@@ -70,6 +89,8 @@ test('the placeholder honours an aborted signal too', async () => {
   await expect(placeholder.forUser(userId, AbortSignal.abort())).rejects.toBeDefined()
   await expect(
     placeholder.createOrganization({
+      email: 'maya@northline.app',
+      memberName: null,
       userId,
       name: 'A',
       idempotencyKey: 'k',

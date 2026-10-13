@@ -176,6 +176,8 @@ describe('sign-up', () => {
       text(started.body, 'id')
     )
     await deps.membership.createOrganization({
+      email: 'maya@northline.app',
+      memberName: null,
       userId: formatId('usr', String(attempt?.state.userId)) as UserId,
       name: 'Northline',
       idempotencyKey: `signup:${text(started.body, 'id')}`,
@@ -873,7 +875,7 @@ describe('failures around the commit of a sign-up', () => {
     expect(deps.membership.organizations).toHaveLength(1)
   })
 
-  test('losing the address to another sign-up while core is being asked is a 409 and the orphan is reported without the address', async () => {
+  test('losing the address to another sign-up while core is being asked is a 409 and the Organization is abandoned', async () => {
     const { deps, signUp, verify, nextEmail } = await setup()
     const email = nextEmail()
     const started = await signUp(email)
@@ -904,30 +906,66 @@ describe('failures around the commit of a sign-up', () => {
 
     expect(lost.status).toBe(409)
     expect(lost.body).toMatchObject({ error: { code: 'flow.invalid_step' } })
-    expect(deps.reported).toHaveLength(1)
-    const reported = String(
-      deps.reported[0]?.error instanceof Error && deps.reported[0].error.message
-    )
-    expect(reported).toContain(deps.membership.organizations[0]?.organizationId ?? 'missing')
-    expect(reported).toContain('reconcile')
-    expect(reported).not.toContain(email)
-    expect(deps.logLines.join('\n')).not.toContain(email)
+    const org = deps.membership.organizations[0]
+    if (!org) {
+      throw new Error('no Organization was made')
+    }
+    expect(deps.membership.abandons).toEqual([
+      {
+        organizationId: org.organizationId,
+        userId: org.owner,
+        idempotencyKey: `abandon:${text(started.body, 'id')}`,
+      },
+    ])
+    expect(deps.reported).toHaveLength(0)
+    const lines = deps.logLines.join('\n')
+    expect(lines).toContain(org?.organizationId ?? 'missing')
+    expect(lines).not.toContain(email)
   })
 })
 
 describe('an Organization that core made and nobody owns', () => {
+  type Setup = Awaited<ReturnType<typeof setup>>
   /** Makes the account write fail, as a database that errors for a reason other than a taken address. */
-  function breakInsert(deps: Awaited<ReturnType<typeof setup>>['deps']) {
+  function breakInsert(deps: Setup['deps']) {
     deps.users.create = async () => {
       throw new Error('connection reset')
     }
   }
-  const reconcileReports = (deps: Awaited<ReturnType<typeof setup>>['deps']) =>
+  /** Another sign-up for the same address commits while core is answering this one. */
+  function loseAddress(deps: Setup['deps'], email: string) {
+    const tenant = deps.tenant.current
+    const createOrganization = deps.membership.createOrganization.bind(deps.membership)
+    deps.membership.createOrganization = async (input) => {
+      const created = await createOrganization(input)
+      await deps.users.create({
+        id: crypto.randomUUID(),
+        projectId: tenant?.projectId ?? '',
+        environmentId: tenant?.environmentId ?? '',
+        email,
+        emailNormalized: email,
+        emailVerifiedAt: deps.clock.now(),
+        firstName: null,
+        lastName: null,
+        createdAt: deps.clock.now(),
+        identityId: crypto.randomUUID(),
+        credentialId: crypto.randomUUID(),
+        passwordHash: '$argon2id$rival',
+      })
+      return created
+    }
+  }
+  const reconcileReports = (deps: Setup['deps']) =>
     deps.reported.filter(
       (entry) => entry.error instanceof Error && entry.error.message.includes('reconcile')
     )
+  const warnings = (deps: Setup['deps']) =>
+    deps.logLines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((entry) => entry.level === 40)
+      .map((entry) => String(entry.msg))
 
-  test('an insert that fails after core answered reports the Organization, user and attempt ids and no address', async () => {
+  test('an insert that throws is reported by ids and never abandoned in the request', async () => {
     const { deps, signUp, verify, nextEmail } = await setup()
     const email = nextEmail()
     const started = await signUp(email)
@@ -937,47 +975,216 @@ describe('an Organization that core made and nobody owns', () => {
     const failed = await verify(started, code)
 
     expect(failed.status).toBe(500)
+    expect(failed.body).toMatchObject({ error: { code: 'server.internal' } })
+    expect(deps.membership.calls.abandon).toBe(0)
     const [report] = reconcileReports(deps)
     const message = report?.error instanceof Error ? report.error.message : ''
     expect(reconcileReports(deps)).toHaveLength(1)
     expect(message).toContain(deps.membership.organizations[0]?.organizationId ?? 'missing')
     expect(message).toContain(text(started.body, 'id'))
-    expect(message).toMatch(/usr_/)
     expect(message).not.toContain(email)
     expect(deps.logLines.join('\n')).not.toContain(email)
   })
 
-  test('retrying one attempt whose insert keeps failing reports its orphan once, not on every retry', async () => {
+  test('a double submit where one insert throws and the other commits ends with a live Organization and no abandon', async () => {
     const { deps, signUp, verify, nextEmail } = await setup()
     const email = nextEmail()
     const started = await signUp(email)
     const code = emailedCode(deps, email)
-    breakInsert(deps)
-
-    for (let n = 0; n < 4; n++) {
-      expect((await verify(started, code)).status).toBe(500)
+    // Request B is held between its call to core and its insert, until request A has finished.
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let coreCalls = 0
+    const createOrganization = deps.membership.createOrganization.bind(deps.membership)
+    deps.membership.createOrganization = async (input) => {
+      coreCalls += 1
+      const mine = coreCalls
+      const created = await createOrganization(input)
+      if (mine === 2) {
+        await gate
+      }
+      return created
+    }
+    // The first insert to be attempted (A's) throws; the held one (B's) is the second.
+    let inserts = 0
+    const create = deps.users.create.bind(deps.users)
+    deps.users.create = async (input) => {
+      inserts += 1
+      if (inserts === 1) {
+        throw new Error('connection reset')
+      }
+      return create(input)
     }
 
-    expect(reconcileReports(deps)).toHaveLength(1)
-    expect(deps.membership.organizations).toHaveLength(1)
+    const first = verify(started, code)
+    const second = verify(started, code)
+    while (coreCalls < 2) {
+      await Bun.sleep(1)
+    }
+    const a = await first
+    release()
+    const b = await second
+
+    expect(a.status).toBe(500)
+    expect(b.status).toBe(200)
+    expect(deps.membership.calls.abandon).toBe(0)
+    const user = await deps.users.findByEmail(deps.tenant.current?.environmentId ?? '', email)
+    expect(user).not.toBeNull()
+    expect(await deps.membership.forUser(formatId('usr', user?.id ?? '') as UserId)).toMatchObject({
+      role: 'owner',
+      organizationStatus: 'active',
+    })
   })
 
-  test('another attempt is reported on its own, once', async () => {
+  test("the safe branch never abandons when the existing account is this attempt's own user", async () => {
     const { deps, signUp, verify, nextEmail } = await setup()
     const email = nextEmail()
-    const first = await signUp(email)
-    const firstCode = emailedCode(deps, email)
-    deps.clock.advance('2m')
-    const second = await signUp(email)
-    const secondCode = emailedCode(deps, email)
+    const started = await signUp(email)
+    const code = emailedCode(deps, email)
+    const tenant = deps.tenant.current
+    const attempt = await deps.flowAttempts.findById(
+      tenant?.environmentId ?? '',
+      text(started.body, 'id')
+    )
+    // A request of this same attempt already committed the account (same user id, same address).
+    await deps.users.create({
+      id: String(attempt?.state.userId),
+      projectId: tenant?.projectId ?? '',
+      environmentId: tenant?.environmentId ?? '',
+      email,
+      emailNormalized: email,
+      emailVerifiedAt: deps.clock.now(),
+      firstName: null,
+      lastName: null,
+      createdAt: deps.clock.now(),
+      identityId: crypto.randomUUID(),
+      credentialId: crypto.randomUUID(),
+      passwordHash: '$argon2id$mine',
+    })
+
+    const done = await verify(started, code)
+
+    expect(done.status).toBe(200)
+    expect(deps.membership.calls.abandon).toBe(0)
+    expect(reconcileReports(deps)).toHaveLength(0)
+  })
+
+  test('an address that belongs to a different user is abandoned once, with the case ids and key', async () => {
+    const { deps, signUp, verify, nextEmail } = await setup()
+    const email = nextEmail()
+    const started = await signUp(email)
+    const code = emailedCode(deps, email)
+    loseAddress(deps, email)
+
+    const lost = await verify(started, code)
+
+    expect(lost.status).toBe(409)
+    expect(lost.body).toMatchObject({ error: { code: 'flow.invalid_step' } })
+    const org = deps.membership.organizations[0]
+    if (!org) {
+      throw new Error('no Organization was made')
+    }
+    expect(deps.membership.abandons).toEqual([
+      {
+        organizationId: org.organizationId,
+        userId: org.owner,
+        idempotencyKey: `abandon:${text(started.body, 'id')}`,
+      },
+    ])
+    expect(reconcileReports(deps)).toHaveLength(0)
+    expect(warnings(deps)).toContain('an Organization with no owner was abandoned')
+    expect(deps.logLines.join('\n')).not.toContain(email)
+  })
+
+  describe('whatever core answers to the abandon, the sign-up answer is the same', () => {
+    test('a refusal (409) is logged by ids, reported once, and never retried', async () => {
+      const { deps, signUp, verify, nextEmail } = await setup()
+      const email = nextEmail()
+      const started = await signUp(email, { organizationName: 'Northline', firstName: 'Zebulon' })
+      const code = emailedCode(deps, email)
+      loseAddress(deps, email)
+      deps.membership.refuseAbandons(true)
+
+      const lost = await verify(started, code)
+
+      expect(lost.status).toBe(409)
+      expect(deps.membership.calls.abandon).toBe(1)
+      expect(warnings(deps)).toContain('core refused to abandon an Organization')
+      const reports = reconcileReports(deps)
+      expect(reports).toHaveLength(1)
+      const message = reports[0]?.error instanceof Error ? reports[0].error.message : ''
+      expect(message).toContain(deps.membership.organizations[0]?.organizationId ?? 'missing')
+      expect(message).toContain('refused')
+      expect(`${message}${deps.logLines.join('\n')}`).not.toContain(email)
+      expect(`${message}${deps.logLines.join('\n')}`).not.toContain('Zebulon')
+    })
+
+    test('a transient failure that clears on the second try is done and not reported', async () => {
+      const { deps, signUp, verify, nextEmail } = await setup()
+      const email = nextEmail()
+      const started = await signUp(email)
+      const code = emailedCode(deps, email)
+      loseAddress(deps, email)
+      deps.membership.failNextAbandons(1)
+
+      const lost = await verify(started, code)
+
+      expect(lost.status).toBe(409)
+      expect(deps.membership.calls.abandon).toBe(2)
+      expect(new Set(deps.membership.abandons.map((a) => a.idempotencyKey)).size).toBe(1)
+      expect(reconcileReports(deps)).toHaveLength(0)
+    })
+
+    test('a transient failure that outlasts the tries is reported by ids', async () => {
+      const { deps, signUp, verify, nextEmail } = await setup()
+      const email = nextEmail()
+      const started = await signUp(email)
+      const code = emailedCode(deps, email)
+      loseAddress(deps, email)
+      deps.membership.failNextAbandons(100)
+
+      const lost = await verify(started, code)
+
+      expect(lost.status).toBe(409)
+      expect(lost.body).toMatchObject({ error: { code: 'flow.invalid_step' } })
+      expect(deps.membership.calls.abandon).toBe(3)
+      expect(warnings(deps)).toContain('could not abandon an Organization')
+      const reports = reconcileReports(deps)
+      expect(reports).toHaveLength(1)
+      const message = reports[0]?.error instanceof Error ? reports[0].error.message : ''
+      expect(message).toContain(deps.membership.organizations[0]?.organizationId ?? 'missing')
+      expect(message).toContain(text(started.body, 'id'))
+      expect(message).not.toContain(email)
+    })
+  })
+
+  test('a burned invitation is reported but never abandoned: the Organization has other members', async () => {
+    const { deps, signUp, verify, nextEmail } = await setup()
+    const email = nextEmail()
+    deps.membership.invite('inv-1', {
+      email,
+      organizationId: `org_${'a'.repeat(32)}`,
+      role: 'rep',
+    })
+    const started = await signUp(email, { invitationToken: 'inv-1' })
+    const code = emailedCode(deps, email)
     breakInsert(deps)
 
-    await verify(first, firstCode)
-    await verify(first, firstCode)
-    await verify(second, secondCode)
-    await verify(second, secondCode)
+    const failed = await verify(started, code)
 
-    expect(reconcileReports(deps)).toHaveLength(2)
+    expect(failed.status).toBe(500)
+    expect(deps.membership.calls.abandon).toBe(0)
+    expect(reconcileReports(deps)).toHaveLength(1)
+  })
+
+  test('an Owner whose account was written is never abandoned', async () => {
+    const { signedUp, deps } = await setup()
+
+    await signedUp()
+
+    expect(deps.membership.calls.abandon).toBe(0)
   })
 
   describe('the report to the tracker', () => {
@@ -1269,5 +1476,127 @@ describe('what the per-process counters allow while they are full', () => {
 
     expect(reply.status).toBe(429)
     expect(reply.body).toMatchObject({ error: { code: 'verification.too_many_attempts' } })
+  })
+})
+
+describe('what core is told about the person (ADR 0015)', () => {
+  const FIRST_AT_LIMIT = 'f'.repeat(100)
+  const LAST_AT_LIMIT = 'l'.repeat(100)
+
+  test.each([
+    ['both names', { firstName: 'Maya', lastName: 'Rao' }, 'Maya Rao'],
+    ['first only', { firstName: 'Maya' }, 'Maya'],
+    ['last only', { lastName: 'Rao' }, 'Rao'],
+    ['neither', {}, null],
+    ['empty strings', { firstName: '', lastName: '' }, null],
+    ['padded', { firstName: '  Maya  ', lastName: ' Rao ' }, 'Maya Rao'],
+    [
+      'both at the length limit',
+      { firstName: FIRST_AT_LIMIT, lastName: LAST_AT_LIMIT },
+      `${FIRST_AT_LIMIT} ${LAST_AT_LIMIT}`,
+    ],
+    ['a control character inside', { firstName: 'Ma\u0007ya', lastName: 'Rao' }, 'Ma ya Rao'],
+  ])(
+    'an Owner sign-up with %s sends the verified address and that name',
+    async (_label, names, expected) => {
+      const { deps, signUp, verify, nextEmail } = await setup()
+      const email = nextEmail()
+      const started = await signUp(email, { organizationName: 'Northline', ...names })
+
+      const done = await verify(started, emailedCode(deps, email))
+
+      expect(done.status).toBe(200)
+      expect(deps.membership.profiles).toEqual([
+        { userId: expect.stringMatching(/^usr_/), email, name: expected },
+      ])
+    }
+  )
+
+  test('the address sent is the verified one in the folded form, whatever case it was typed in', async () => {
+    const { deps, signUp, verify } = await setup()
+    const started = await signUp('  Maya.Rao@Northline.APP ', { organizationName: 'Northline' })
+
+    const done = await verify(started, emailedCode(deps, 'maya.rao@northline.app'))
+
+    expect(done.status).toBe(200)
+    expect(deps.membership.profiles.map((p) => p.email)).toEqual(['maya.rao@northline.app'])
+  })
+
+  test.each([
+    ['both names', { firstName: 'Rae', lastName: 'Pell' }, 'Rae Pell'],
+    ['neither', {}, null],
+    ['last only', { lastName: ' Pell ' }, 'Pell'],
+  ])(
+    'an invitation sign-up with %s sends the address and that name',
+    async (_label, names, expected) => {
+      const { deps, signUp, verify, nextEmail } = await setup()
+      const email = nextEmail()
+      deps.membership.invite('inv-1', {
+        email,
+        organizationId: `org_${'a'.repeat(32)}`,
+        role: 'rep',
+      })
+      const started = await signUp(email, { invitationToken: 'inv-1', ...names })
+
+      const done = await verify(started, emailedCode(deps, email))
+
+      expect(done.status).toBe(200)
+      expect(deps.membership.profiles).toEqual([
+        { userId: expect.stringMatching(/^usr_/), email, name: expected },
+      ])
+    }
+  )
+
+  test('the name is never written to a log line or a report', async () => {
+    const { deps, signUp, verify, nextEmail } = await setup()
+    const email = nextEmail()
+    const started = await signUp(email, {
+      organizationName: 'Northline',
+      firstName: 'Zebulon',
+      lastName: 'Quillfeather',
+    })
+    deps.users.create = async () => {
+      throw new Error('connection reset')
+    }
+    deps.membership.refuseAbandons(true)
+
+    await verify(started, emailedCode(deps, email))
+
+    const everything = JSON.stringify([deps.logLines, deps.reported.map((r) => String(r.error))])
+    expect(everything).not.toContain('Zebulon')
+    expect(everything).not.toContain('Quillfeather')
+    expect(everything).not.toContain(email)
+  })
+
+  test('a name that cannot be sent is logged by attempt id, never by value, and the sign-up still works', async () => {
+    const { deps, signUp, verify, nextEmail } = await setup()
+    const email = nextEmail()
+    const started = await signUp(email, {
+      organizationName: 'Northline',
+      firstName: '\u0007\u0007',
+      lastName: '\u0001',
+    })
+
+    const done = await verify(started, emailedCode(deps, email))
+
+    expect(done.status).toBe(200)
+    expect(deps.membership.profiles.map((p) => p.name)).toEqual([null])
+    const lines = deps.logLines.map((line) => JSON.parse(line) as Record<string, unknown>)
+    const warning = lines.find(
+      (l) => l.level === 40 && l.msg === 'a name could not be sent to core'
+    )
+    expect(warning).toMatchObject({ attemptId: text(started.body, 'id') })
+    expect(deps.logLines.join('\n')).not.toContain('\\u0007')
+    expect(deps.logLines.join('\n')).not.toContain('\u0007')
+  })
+
+  test('an absent or blank name is not logged as a fallback', async () => {
+    const { deps, signUp, verify, nextEmail } = await setup()
+    const email = nextEmail()
+    const started = await signUp(email, { organizationName: 'Northline', firstName: '  ' })
+
+    await verify(started, emailedCode(deps, email))
+
+    expect(deps.logLines.join('\n')).not.toContain('a name could not be sent to core')
   })
 })

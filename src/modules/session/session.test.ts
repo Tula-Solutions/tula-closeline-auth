@@ -443,6 +443,7 @@ describe('refreshing', () => {
       role: 'manager',
     })
     await deps.membership.acceptInvitation({
+      memberName: null,
       userId,
       invitationToken: 'promote',
       email: 'maya@northline.app',

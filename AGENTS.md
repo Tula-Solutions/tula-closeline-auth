@@ -102,8 +102,14 @@ no `Retry-After`, reported once per attempt, the try stays spent. Calls to core 
 Sign-up safety: the user id and the idempotency key `signup:<attempt id>` are fixed when the
 attempt starts, and `verify-email` holds no database transaction across the call to core. Order:
 `findByEmail`, ask core, write the account in one short transaction; the emailed code is spent
-only after the account exists, so a retry works and gets the same Organization. Details, and the
-open ticket on reconciling Organizations whose account was never written: `.claude/rules/membership.md`.
+only after the account exists, so a retry works and gets the same Organization. Core is given the
+verified address (normalized) and the name (first and last joined by a space, `null` when absent;
+`composeMemberName`) for its member list (hub ADR 0015). When the account is then not written for
+an Owner's Organization because the address belongs to a different user, auth asks core to
+abandon it at once (key `abandon:<attempt id>`, three tries inside one 5 s bound). An unexpected
+insert error is only reported: it cannot be proved final while the attempt is usable (a double
+submit would lose a working Organization), so that abandon waits for a sweep, which does not exist yet. Details, the outcomes and what is left:
+`.claude/rules/membership.md`.
 
 ## Retention
 

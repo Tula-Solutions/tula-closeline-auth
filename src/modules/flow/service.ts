@@ -1,4 +1,10 @@
-import { AUTH_ERRORS, ERRORS, formatId, type UserId } from 'tula-closeline-contract'
+import {
+  AUTH_ERRORS,
+  ERRORS,
+  formatId,
+  type OrganizationId,
+  type UserId,
+} from 'tula-closeline-contract'
 import { isAppError } from 'tula-closeline-kit'
 import { z } from 'zod'
 import type { Container } from '~/container'
@@ -7,6 +13,7 @@ import { fail, MembershipFaulted, MembershipOutage, rateLimited } from '~/errors
 import { randomToken, sha256Hex, timingSafeEqual } from '~/lib/crypto'
 import { durationToMs } from '~/lib/duration'
 import { maskEmail, normalizeEmail, parseEmail } from '~/lib/email'
+import { composeMemberName } from '~/modules/membership/profile'
 import * as Membership from '~/modules/membership/service'
 import * as Passwords from '~/modules/password/service'
 import * as Sessions from '~/modules/session/service'
@@ -312,6 +319,48 @@ export async function reportOrphan(
 }
 
 /**
+ * Deals with an Organization that core made for a sign-up whose account was not written: asks core
+ * to abandon it (when `abandon` is true) with the key `abandon:<attempt id>`, and reports it to
+ * the tracker (ids only, once per attempt per hour, as {@link reportOrphan}) only if it is still
+ * there afterwards: core refused, or could not be asked within the bound. It never throws, and the
+ * failed sign-up's answer is not changed by what it finds. Exported for its tests.
+ */
+export async function settleOrphan(
+  deps: Pick<Container, 'logger' | 'rateLimiter' | 'membership'>,
+  context: ClientContext,
+  status: number,
+  orphan: {
+    organizationId: string
+    userId: string
+    attemptId: string
+    why: string
+    abandon: boolean
+  }
+): Promise<void> {
+  const { abandon, ...ids } = orphan
+  let outcome: Membership.AbandonOutcome | 'not_asked' = 'not_asked'
+  if (abandon) {
+    try {
+      outcome = await Membership.abandon(deps, {
+        organizationId: ids.organizationId as OrganizationId,
+        userId: ids.userId as UserId,
+        idempotencyKey: `abandon:${ids.attemptId}`,
+      })
+    } catch {
+      outcome = 'unfinished'
+    }
+  }
+  if (outcome === 'done') {
+    deps.logger.warn('an Organization with no owner was abandoned', ids)
+    return
+  }
+  await reportOrphan(deps, context, status, {
+    ...ids,
+    why: `${ids.why}; abandon ${outcome === 'not_asked' ? 'not asked' : outcome}`,
+  })
+}
+
+/**
  * Tells the deployment that core said a brand new user already belongs to an Organization (a
  * fault on one side: auth makes the user id for this attempt alone). Ids only, never an address.
  * Logged every time, reported to the tracker once per attempt per hour, so a client retrying
@@ -388,14 +437,27 @@ export async function verifyEmail(
   const sign = await Tokens.signer(deps, tenant)
   const now = deps.clock.now()
   const userId = state.userId
+  // Core keeps a copy of the verified address (as normalized, the form its checks fold to) and
+  // the person's name for the member list (ADR 0015).
+  const memberName = composeMemberName(state.firstName, state.lastName)
+  if (memberName === null && [state.firstName, state.lastName].some((part) => part?.trim())) {
+    // A name was given but nothing of it can go to core: say so by attempt id, never the value.
+    deps.logger.warn('a name could not be sent to core', { attemptId: attempt.id })
+  }
   const join: Membership.JoinRequest = state.organizationName
-    ? { kind: 'create', name: state.organizationName }
+    ? {
+        kind: 'create',
+        name: state.organizationName,
+        email: attempt.identifier,
+        memberName,
+      }
     : {
         kind: 'invitation',
         token: new TextDecoder().decode(
           await deps.secretBox.open(SEAL_PURPOSE, state.sealedInvitation ?? '', attempt.id)
         ),
         email: attempt.identifier,
+        memberName,
       }
 
   // Most taken addresses are caught here, before core is asked for an Organization nobody owns.
@@ -423,7 +485,13 @@ export async function verifyEmail(
     throw error
   }
   // From here core has made an Organization: if the account is not written, nobody owns it.
-  const orphan = (why: string, status: number) =>
+  // The request abandons it in exactly one case (below): the address is held by a different
+  // user. Every other failure is only reported, because nothing in this process can prove the
+  // account will never be written while the attempt is still usable (a double submit of the same
+  // attempt, or a commit that outlived a dropped connection, would make the abandon delete a
+  // working Owner's Organization). Abandoning those is left to a sweep that waits until the
+  // attempt can no longer write an account and a read shows none.
+  const report = (why: string, status: number) =>
     reportOrphan(deps, context, status, {
       organizationId: membership.organizationId,
       userId: userUuid,
@@ -447,15 +515,30 @@ export async function verifyEmail(
       passwordHash: state.passwordHash,
     })
     if (!created) {
+      // A unique violation: this user id, or this address, is already taken.
       const mine = await deps.users.findById(tenant.environmentId, userId)
       if (mine?.emailNormalized !== attempt.identifier) {
-        await orphan('the address went to another sign-up', 409)
+        const holder = await deps.users.findByEmail(tenant.environmentId, attempt.identifier)
+        if (holder !== null && holder.id !== userId && mine === null) {
+          // Proven by reading who owns the address: a different user, and this user id has no
+          // account, so this attempt's account can never be written. The only abandon in a request.
+          await settleOrphan(deps, context, 409, {
+            organizationId: membership.organizationId,
+            userId: userUuid,
+            attemptId: attempt.id,
+            why: 'the address went to another sign-up',
+            abandon: join.kind === 'create',
+          })
+        } else {
+          await report('the account could not be written and no other holder was proven', 409)
+        }
         throw fail(AUTH_ERRORS['flow.invalid_step'])
       }
+      // Otherwise the account is this attempt's own (an earlier request of it committed): done.
     }
   } catch (error) {
     if (!isAppError(error)) {
-      await orphan('the account could not be written', 500)
+      await report('the account could not be written', 500)
     }
     throw error
   }
