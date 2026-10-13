@@ -77,32 +77,18 @@ Answer mapping: `.claude/rules/membership.md`. Sign-in and refresh read the Orga
 `active` and `suspended` get tokens, `deleted` `organization.deleted` (410; refresh also ends the
 session), none `auth.no_organization` (403, reported). Core slow or down: sign-in,
 refresh and sign-up answer 503 `membership.unavailable` (`Retry-After: 5`), issuing, counting,
-rotating and spending nothing: retry the same attempt, code or token.
+rotating and spending nothing: retry the same attempt, code or token (a sign-up gives back the
+verification try the code cost, so outages never use up a correct code). An outage is logged at
+warn per request, not reported; a rejected secret is reported once a minute per cause class
+(`src/http/errors.ts`). Core saying a new user already belongs to an Organization is a fault: 500,
+no `Retry-After`, reported once per attempt, the try stays spent. Calls to core are capped
+(`CORE_CONCURRENCY`, `CORE_QUEUE`); past the cap a call is 503 at once.
 
 Sign-up safety: the user id and the idempotency key `signup:<attempt id>` are fixed when the
-attempt starts. `verify-email` holds no database transaction across the call to core (a slow core
-would starve the pool and take sign-in, refresh and `/readyz` down with it). Order: check the
-address is free (`findByEmail`), ask core with the key and the user id, then write the account in
-one short transaction. If core refuses, is down or exceeds the 5 s bound (the call's `AbortSignal`
-aborts at the bound, so an adapter cancels the request), nothing was written and the answer is
-`signup.*` (422) or `membership.unavailable` (503); the emailed code is spent only after the
-account exists, so a retry works, and a retry (even after a crash) gets the same Organization
-from core. An insert that finds the same user id already there is such a retry and counts as done.
-After the commit, spending the code and closing the attempt are best-effort (logged with the
-attempt id, never fatal); a failure creating the first session is an error but the account
-exists, and signing in recovers it.
-
-**Orphaned Organizations still need reconciliation (open, a follow-up ticket).** Core can create
-an Organization for a sign-up whose account is never written: the insert loses the address to
-another sign-up (409 `flow.invalid_step`), the insert fails for another reason (500), the process
-dies between core and the insert, or the attempt expires before a retry (a new attempt has a new
-key, so a second Organization). The first two are reported through `reportError` with the
-Organization, user and attempt ids and no address, once per attempt per hour. An orphan is always
-logged with ids, even when the report is suppressed or the limiter map is full. A burned
-invitation is the same. A timed-out call is not reported with an Organization id (none is
-known); a retry with the same key converges. Auth does not clean these up; a reconciliation job
-must find Organizations whose owner never signed in, which needs a call in core that does not
-exist yet.
+attempt starts, and `verify-email` holds no database transaction across the call to core. Order:
+`findByEmail`, ask core, write the account in one short transaction; the emailed code is spent
+only after the account exists, so a retry works and gets the same Organization. Details, and the
+open ticket on reconciling Organizations whose account was never written: `.claude/rules/membership.md`.
 
 ## Retention
 
@@ -125,7 +111,8 @@ by this service yet.
 `READINESS_TIMEOUT_MS`, `SHUTDOWN_TIMEOUT_MS`, `SHUTDOWN_GRACE_MS`, `MAX_REQUEST_BODY_BYTES`,
 `DATABASE_URL`, `AUTH_MASTER_KEY` (64 hex, never logged), `PUBLIC_URL`, `CORE_BASE_URL` (https)
 and `CORE_INTERNAL_TOKEN` (32+ characters, never logged) (all five required outside `local`; in
-`local` both core keys or neither), `TOKEN_AUDIENCE` (default `closeline`), `DB_POOL_MAX` (default 10, at least 4),
+`local` both core keys or neither), `CORE_CONCURRENCY` (default 64), `CORE_QUEUE` (default 256),
+`TOKEN_AUDIENCE` (default `closeline`), `DB_POOL_MAX` (default 10, at least 4),
 `RETENTION_INTERVAL_MS`, `RETENTION_BATCH_SIZE`, `RETENTION_RUN_TIMEOUT_MS`, `HASH_CONCURRENCY`,
 `HASH_QUEUE`, `SIGN_IN_CONCURRENCY`, `SIGN_IN_QUEUE`, `BREACH_CHECK_CONCURRENCY`,
 `BREACH_CHECK_QUEUE`. Add a key in both files.
@@ -188,9 +175,12 @@ The per-request middleware stack (`createBaseApp`), `/healthz`, and session refr
 (`Sessions.refresh`: each signed-in device calls it every minute). Refresh is O(1) in users,
 sessions, Organizations and signing keys: one token lookup by hash, one user lookup by id, one
 active-key read (`SigningKeyStore.active`, one row however many keys were retired), one
-membership read to core (the token hook, as at sign-in: one HTTP call, retried at most once, 4.15 s
-worst case), one signature, one rotation. The JWKS and bearer routes read at most 20 keys,
-bounded in SQL by retirement time and a limit. Budgets are in `bench/`.
+membership read to core (the token hook: one HTTP call, retried at most once, 4.15 s worst case,
+asked once per request even if the rotation is retried; a replayed or expired token costs none),
+one signature, one rotation. The membership lookup through the HTTP adapter is a hot path too
+(`bench/membership.bench.test.ts`: best batch about 53 ms per 500 lookups, budget 270 ms). The
+JWKS and bearer routes read at most 20 keys, bounded in SQL by retirement time and a limit.
+Budgets are in `bench/`.
 
 A benchmark times `measure(operation)`: a warm-up, then several batches, gated on the fastest, so a
 noisy runner cannot fail it but a real regression does. Budget is about 5x the typical best batch,
