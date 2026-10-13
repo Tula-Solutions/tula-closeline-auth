@@ -1,7 +1,15 @@
 import { createFixedClock, createLogger, type FixedClock } from 'tula-closeline-kit'
+import { MemoryBreachChecker } from '~/adapters/memory/breach-checker'
 import { createMemoryFixedProject } from '~/adapters/memory/fixed-project'
+import { MemoryFlowAttemptStore } from '~/adapters/memory/flow-attempts'
+import { MemoryLockout } from '~/adapters/memory/lockout'
+import { MemoryMailer } from '~/adapters/memory/mailer'
 import { createMemoryMembership, type MemoryMembership } from '~/adapters/memory/membership'
+import { MemoryRateLimiter } from '~/adapters/memory/rate-limiter'
+import { MemorySessionStore } from '~/adapters/memory/sessions'
 import { createMemorySigningKeyStore } from '~/adapters/memory/signing-keys'
+import { MemoryUserRepository } from '~/adapters/memory/users'
+import { MemoryVerificationTokenStore } from '~/adapters/memory/verification-tokens'
 import { uuidV7Ids } from '~/adapters/system/ids'
 import type { Container, ErrorContext, ReadinessCheck } from '~/container'
 import { loadEnv, masterKey } from '~/env'
@@ -19,11 +27,20 @@ export type TestDeps = Container & {
   reported: { error: unknown; context: ErrorContext }[]
   /** The memory membership service, with the controls to arrange and break it. */
   membership: MemoryMembership
+  /** The mailer that keeps what it was asked to send. */
+  mailer: MemoryMailer
+  /** The breach checker, with the passwords it should call breached. */
+  breachChecker: MemoryBreachChecker
 }
 
 /** Builds a container of in-memory doubles and a fixed clock; `overrides` replace any field. */
 export function createTestDeps(
-  overrides: { readinessChecks?: readonly ReadinessCheck[]; env?: Record<string, string> } = {}
+  overrides: {
+    readinessChecks?: readonly ReadinessCheck[]
+    env?: Record<string, string>
+    /** Passwords the breach checker calls breached. */
+    breached?: string[]
+  } = {}
 ): TestDeps {
   const logLines: string[] = []
   const reported: TestDeps['reported'] = []
@@ -37,6 +54,7 @@ export function createTestDeps(
     ...overrides.env,
   })
 
+  const clock = createFixedClock('2026-01-01T00:00:00Z')
   return {
     env,
     logger: createLogger({
@@ -44,7 +62,7 @@ export function createTestDeps(
       level: 'debug',
       destination: { write: (line) => void logLines.push(line) },
     }),
-    clock: createFixedClock('2026-01-01T00:00:00Z'),
+    clock,
     readinessChecks: overrides.readinessChecks ?? [],
     lifecycle: { draining: false },
     ids: uuidV7Ids,
@@ -54,6 +72,14 @@ export function createTestDeps(
     secretBox: createSecretBox(masterKey(env)),
     keyedHash: createKeyedHash(masterKey(env)),
     membership: createMemoryMembership(),
+    users: new MemoryUserRepository(),
+    flowAttempts: new MemoryFlowAttemptStore(),
+    verificationTokens: new MemoryVerificationTokenStore(),
+    sessions: new MemorySessionStore(),
+    mailer: new MemoryMailer(),
+    rateLimiter: new MemoryRateLimiter(clock),
+    lockout: new MemoryLockout(clock),
+    breachChecker: new MemoryBreachChecker(overrides.breached),
     close: async () => {},
     reportError: (error, context) => {
       reported.push({ error, context })

@@ -8,19 +8,35 @@ import {
   type Logger,
   systemClock,
 } from 'tula-closeline-kit'
+import { HibpBreachChecker } from '~/adapters/breach/hibp'
+import { MemoryLockout } from '~/adapters/memory/lockout'
+import { MemoryRateLimiter } from '~/adapters/memory/rate-limiter'
 import { createPlaceholderMembership } from '~/adapters/placeholder/membership'
 import { createPostgresFixedProject } from '~/adapters/postgres/fixed-project'
+import { PostgresFlowAttemptStore } from '~/adapters/postgres/flow-attempts'
+import { PostgresSessionStore } from '~/adapters/postgres/sessions'
 import { createPostgresSigningKeyStore } from '~/adapters/postgres/signing-keys'
+import { PostgresUserRepository } from '~/adapters/postgres/users'
+import { PostgresVerificationTokenStore } from '~/adapters/postgres/verification-tokens'
 import { uuidV7Ids } from '~/adapters/system/ids'
+import { createUnconfiguredMailer } from '~/adapters/unconfigured/mailer'
 import { describeError } from '~/describe-error'
 import { databaseUrl, type Env, loadEnv, masterKey } from '~/env'
 import { SERVICE } from '~/info'
 import { createKeyedHash, type KeyedHash } from '~/lib/keyed-hash'
 import { createSecretBox, type SecretBox } from '~/lib/secret-box'
+import type { BreachChecker } from '~/ports/breach-checker'
 import type { FixedProject, Tenant } from '~/ports/fixed-project'
+import type { FlowAttemptStore } from '~/ports/flow-attempt-store'
 import type { IdGenerator } from '~/ports/id-generator'
+import type { Lockout } from '~/ports/lockout'
+import type { Mailer } from '~/ports/mailer'
 import type { MembershipClaims } from '~/ports/membership'
+import type { RateLimiter } from '~/ports/rate-limiter'
+import type { SessionStore } from '~/ports/session-store'
 import type { SigningKeyStore } from '~/ports/signing-key-store'
+import type { UserRepository } from '~/ports/user-repository'
+import type { VerificationTokenStore } from '~/ports/verification-token-store'
 
 /** One dependency probe for `/readyz`: resolve when healthy, reject or stall when not. */
 export type ReadinessCheck = {
@@ -71,6 +87,22 @@ export type Container = {
   keyedHash: KeyedHash
   /** Organization and role for a token, from the core service. */
   membership: MembershipClaims
+  /** Users with their email identity and password. */
+  users: UserRepository
+  /** Open sign-up and sign-in attempts. */
+  flowAttempts: FlowAttemptStore
+  /** Emailed verification codes. */
+  verificationTokens: VerificationTokenStore
+  /** Sessions and their refresh tokens. */
+  sessions: SessionStore
+  /** Sends the verification emails. */
+  mailer: Mailer
+  /** Per-key request limits (per process until a shared store exists; see the README). */
+  rateLimiter: RateLimiter
+  /** Backs off repeated wrong passwords per identifier (per process, as above). */
+  lockout: Lockout
+  /** Whether a password appears in known breaches. */
+  breachChecker: BreachChecker
   /** Releases what the container holds (database connections); call once on shutdown. */
   close: () => Promise<void>
 }
@@ -139,6 +171,15 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     keyedHash: createKeyedHash(masterKey(env)),
     // Placeholder until the core service exists (ticket 1.9); it never invents a membership.
     membership: createPlaceholderMembership(),
+    users: new PostgresUserRepository(database.db),
+    flowAttempts: new PostgresFlowAttemptStore(database.db),
+    verificationTokens: new PostgresVerificationTokenStore(database.db),
+    sessions: new PostgresSessionStore(database.db),
+    // No mail provider is chosen yet: sending fails with `mail.unavailable` until one is wired.
+    mailer: createUnconfiguredMailer(),
+    rateLimiter: new MemoryRateLimiter(systemClock),
+    lockout: new MemoryLockout(systemClock),
+    breachChecker: new HibpBreachChecker({ logger }),
     close: database.close,
     reportError: (error, context) => {
       logger.error('unhandled error', { ...context, error: describeError(error) })

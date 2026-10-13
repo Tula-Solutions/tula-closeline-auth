@@ -1,0 +1,81 @@
+import { describe, expect, test } from 'bun:test'
+import { formatId, type UserId } from 'tula-closeline-contract'
+import { createMemoryMembership } from '~/adapters/memory/membership'
+import { MembershipUnavailable } from '~/ports/membership'
+import * as Membership from './service'
+
+const userId = formatId('usr', crypto.randomUUID()) as UserId
+
+describe('joining an Organization', () => {
+  test('creates one for a new user, once per idempotency key', async () => {
+    const membership = createMemoryMembership()
+
+    const first = await Membership.join(
+      { membership },
+      userId,
+      { kind: 'create', name: 'Northline' },
+      'signup:1'
+    )
+    const again = await Membership.join(
+      { membership },
+      userId,
+      { kind: 'create', name: 'Northline' },
+      'signup:1'
+    )
+
+    expect(first.role).toBe('owner')
+    expect(again).toEqual(first)
+    expect(membership.organizations).toHaveLength(1)
+  })
+
+  test('turns a refusal into the contract error for it', async () => {
+    const membership = createMemoryMembership()
+
+    await expect(
+      Membership.join({ membership }, userId, { kind: 'create', name: '  ' }, 'k1')
+    ).rejects.toMatchObject({ code: 'signup.organization_name_invalid', status: 422 })
+    await expect(
+      Membership.join(
+        { membership },
+        userId,
+        { kind: 'invitation', token: 'nope', email: 'a@b.app' },
+        'k2'
+      )
+    ).rejects.toMatchObject({ code: 'signup.invitation_invalid', status: 422 })
+  })
+
+  test('a service that is down or answers something unexpected is a 503', async () => {
+    const membership = createMemoryMembership()
+    membership.breakDown(true)
+
+    await expect(
+      Membership.join({ membership }, userId, { kind: 'create', name: 'Northline' }, 'k')
+    ).rejects.toMatchObject({ code: 'membership.unavailable', status: 503 })
+    await expect(Membership.of({ membership }, userId)).rejects.toMatchObject({
+      code: 'membership.unavailable',
+    })
+    const odd = {
+      ...createMemoryMembership(),
+      forUser: async () => {
+        throw new TypeError('socket hang up')
+      },
+    }
+    await expect(Membership.of({ membership: odd }, userId)).rejects.toMatchObject({ status: 503 })
+    expect(new MembershipUnavailable().message).toContain('unavailable')
+  })
+
+  test('stops waiting for a service that never answers', async () => {
+    const never = new Promise<never>(() => {})
+    const membership = { ...createMemoryMembership(), forUser: () => never }
+    const real = globalThis.setTimeout
+    // Shrink the deadline for this test only; the production value is 5 seconds.
+    globalThis.setTimeout = ((fn: () => void) => real(fn, 1)) as unknown as typeof setTimeout
+    try {
+      await expect(Membership.of({ membership }, userId)).rejects.toMatchObject({
+        code: 'membership.unavailable',
+      })
+    } finally {
+      globalThis.setTimeout = real
+    }
+  })
+})

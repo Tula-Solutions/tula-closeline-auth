@@ -23,6 +23,13 @@ test('the app serves its OpenAPI document describing every route and the error b
     '/.well-known/jwks.json',
     '/healthz',
     '/readyz',
+    '/v1/client/me',
+    '/v1/client/password-policy',
+    '/v1/client/sign-ins',
+    '/v1/client/sign-ins/{id}/password',
+    '/v1/client/sign-ups',
+    '/v1/client/sign-ups/{id}/resend-code',
+    '/v1/client/sign-ups/{id}/verify-email',
   ])
   expect(document.paths['/healthz']?.get.responses['500']).toBeDefined()
   expect(document.paths['/readyz']?.get.responses['503']).toBeDefined()
