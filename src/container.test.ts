@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { formatId } from 'tula-closeline-contract'
 import { MailerNotConfigured } from '~/adapters/unconfigured/mailer'
 import { startFakeCore } from '~/testing/fake-core'
-import { createContainer, createMembership, reportSafely } from './container'
+import { createContainer, createMailer, createMembership, reportSafely } from './container'
 import { type Env, loadEnv } from './env'
 
 test('the default reportError logs the failure with its request context at error level', () => {
@@ -307,4 +307,31 @@ describe('the mailer', () => {
       await mailbox.stop(true)
     }
   })
+
+  test.each(['dev', 'staging', 'prod'] as const)(
+    'a hand-built %s Env with MAIL_LOCAL_URL set throws instead of selecting the local adapter',
+    (environment) => {
+      const env = {
+        ...loadEnv({ ENVIRONMENT: 'local', REGION: 'us' }),
+        ENVIRONMENT: environment,
+        MAIL_LOCAL_URL: 'http://evil.example.com',
+      } as Env
+
+      expect(() => createMailer(env, { warn: () => {} })).toThrow(/MAIL_LOCAL_URL/)
+    }
+  )
+
+  test.each(['local', 'dev', 'staging', 'prod'] as const)(
+    'a hand-built %s Env without MAIL_LOCAL_URL gets the unconfigured mailer',
+    async (environment) => {
+      const env = {
+        ...loadEnv({ ENVIRONMENT: 'local', REGION: 'us' }),
+        ENVIRONMENT: environment,
+      } as Env
+
+      await expect(createMailer(env, { warn: () => {} }).send(MESSAGE)).rejects.toBeInstanceOf(
+        MailerNotConfigured
+      )
+    }
+  )
 })

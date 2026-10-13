@@ -16,8 +16,10 @@ message to Mailpit's send API (`POST /api/v1/send`: `From {Email}`, `To [{Email}
 `Text`, `HTML`). `MAIL_LOCAL_FROM` is its sender (default `no-reply@closeline.test`).
 
 - `src/env.ts` accepts both keys only when `ENVIRONMENT=local`, and the URL only as an `http`
-  origin on `127.0.0.1`, `::1` or `localhost`, with no credentials, path, query or fragment. A
-  refusal names the key and the rule, never the value.
+  origin written exactly `http://127.0.0.1`, `http://[::1]` or `http://localhost` (optional port
+  1 to 65535, optional trailing slash; no other spelling of the address), stored as that canonical
+  origin. A blank value is refused: leave the key out. `createMailer` throws if the URL is set in
+  any other environment. A refusal names the key and the rule, never the value.
 - Each attempt has a 2 s timeout; at most 3 attempts, with a jittered pause, on a network error, a
   timeout or a 5xx. A 4xx or a redirect is final. The failure is `MailDeliveryFailed`.
 - Nothing logs or throws an address, subject, code, link, body or the mailbox's answer: only an

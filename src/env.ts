@@ -4,26 +4,25 @@ import { z } from 'zod'
 /** The most grace plus drain may add up to, so an orchestrator's kill window is not outlasted. */
 const MAX_SHUTDOWN_TOTAL_MS = 60_000
 
-/** The hosts a local mailbox may be on. */
-const LOOPBACK_HOSTS: readonly string[] = ['127.0.0.1', '[::1]', 'localhost']
+/**
+ * The three spellings of a local mailbox's origin, with an optional port (1 to 65535, no leading
+ * zero) and an optional single trailing slash. Matched on the raw value, so no other spelling of
+ * the same address (`127.1`, `2130706433`, `127.0.0.1.`, a full-width name, spaces) is accepted.
+ */
+const LOCAL_MAILBOX =
+  /^http:\/\/(127\.0\.0\.1|\[::1\]|[lL][oO][cC][aA][lL][hH][oO][sS][tT])(?::([1-9]\d{0,4}))?\/?$/
 
-/** Whether `value` is an `http` origin on a loopback host with nothing after the port. */
-function isLocalMailboxUrl(value: string): boolean {
-  if (value.includes('?') || value.includes('#')) {
-    return false
+/** The canonical origin of a local mailbox (lower-case, no trailing slash), or `undefined`. */
+function localMailboxOrigin(value: string): string | undefined {
+  const match = LOCAL_MAILBOX.exec(value)
+  if (match === null) {
+    return undefined
   }
-  try {
-    const url = new URL(value)
-    return (
-      url.protocol === 'http:' &&
-      url.username === '' &&
-      url.password === '' &&
-      url.pathname === '/' &&
-      LOOPBACK_HOSTS.includes(url.hostname)
-    )
-  } catch {
-    return false
+  const port = match[2]
+  if (port !== undefined && Number(port) > 65535) {
+    return undefined
   }
+  return `http://${(match[1] ?? '').toLowerCase()}${port === undefined ? '' : `:${port}`}`
 }
 
 const schema = z
@@ -117,8 +116,8 @@ const schema = z
       .regex(/^[\x21-\x7e]+$/, 'CORE_INTERNAL_TOKEN must be printable characters with no spaces')
       .optional(),
     /**
-     * Where a local mailbox (Mailpit) takes mail: `http` on a loopback host (`127.0.0.1`, `::1`
-     * or `localhost`), with no credentials, path, query or fragment. Accepted only when
+     * Where a local mailbox (Mailpit) takes mail: exactly `http://127.0.0.1`, `http://[::1]` or
+     * `http://localhost`, with an optional port and trailing slash and nothing else. Accepted only when
      * `ENVIRONMENT=local`. With it set, sign-up mail goes to that mailbox; without it the
      * unconfigured mailer stays and sign-up answers `mail.unavailable`.
      */
@@ -137,7 +136,7 @@ const schema = z
         })
       }
     }
-    if (env.MAIL_LOCAL_URL !== undefined && !isLocalMailboxUrl(env.MAIL_LOCAL_URL)) {
+    if (env.MAIL_LOCAL_URL !== undefined && localMailboxOrigin(env.MAIL_LOCAL_URL) === undefined) {
       ctx.addIssue({
         code: 'custom',
         path: ['MAIL_LOCAL_URL'],
@@ -187,6 +186,12 @@ const schema = z
     message: `SHUTDOWN_GRACE_MS plus SHUTDOWN_TIMEOUT_MS must not exceed ${MAX_SHUTDOWN_TOTAL_MS} ms in total`,
     path: ['SHUTDOWN_TIMEOUT_MS'],
   })
+  .transform((env) =>
+    // Keep the canonical origin, so nothing downstream sees another spelling of the address.
+    env.MAIL_LOCAL_URL === undefined
+      ? env
+      : { ...env, MAIL_LOCAL_URL: localMailboxOrigin(env.MAIL_LOCAL_URL) ?? env.MAIL_LOCAL_URL }
+  )
 
 /** The validated process configuration. */
 export type Env = z.infer<typeof schema>

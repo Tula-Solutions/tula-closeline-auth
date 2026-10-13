@@ -280,8 +280,8 @@ describe('proxy variables', () => {
       for (const name of PROXY_VARIABLES) {
         process.env[name] = proxy.url
       }
-      delete process.env.NO_PROXY
-      delete process.env.no_proxy
+      process.env.NO_PROXY = ''
+      process.env.no_proxy = ''
       const { mailer } = connect(mailbox)
 
       await mailer.send(MESSAGE)
@@ -289,19 +289,16 @@ describe('proxy variables', () => {
       expect(proxy.seen).toHaveLength(0)
       expect(mailbox.seen).toHaveLength(1)
     } finally {
-      for (const [name, value] of saved) {
-        if (value === undefined) {
-          delete process.env[name]
-        } else {
-          process.env[name] = value
-        }
-      }
+      // An empty value, not `delete`: in this Bun version a deleted proxy variable is still
+      // honoured by later `fetch` calls in the same process (the membership tests would fail),
+      // while an empty one means no proxy.
       for (const [name, value] of [
+        ...saved,
         ['NO_PROXY', noProxy[0]],
         ['no_proxy', noProxy[1]],
       ] as const) {
-        if (value !== undefined) {
-          process.env[name] = value
+        if (value !== undefined || name.toLowerCase() !== 'no_proxy') {
+          process.env[name] = value ?? ''
         }
       }
     }

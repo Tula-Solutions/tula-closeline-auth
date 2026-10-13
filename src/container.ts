@@ -164,19 +164,24 @@ export function createMembership(env: Env, logger: Pick<Logger, 'warn'>): Member
 }
 
 /**
- * Chooses the mailer: the local mailbox adapter when `MAIL_LOCAL_URL` is set (`loadEnv` accepts
- * it only in `local`, on a loopback address), otherwise the unconfigured one, which fails every
- * send with `mail.unavailable`. The production provider is still undecided (hub issue #35).
+ * Chooses the mailer: the local mailbox adapter when `MAIL_LOCAL_URL` is set, otherwise the
+ * unconfigured one, which fails every send with `mail.unavailable`. The local adapter is built
+ * only when `ENVIRONMENT` is `local`: with the URL set anywhere else this throws, as {@link loadEnv}
+ * does, instead of trusting that it ran or falling back. The production provider is still
+ * undecided (hub issue #35).
  */
 export function createMailer(env: Env, logger: Pick<Logger, 'warn'>): Mailer {
-  if (env.MAIL_LOCAL_URL !== undefined) {
-    return createMailpitMailer({
-      baseUrl: env.MAIL_LOCAL_URL,
-      from: env.MAIL_LOCAL_FROM ?? DEFAULT_LOCAL_MAIL_FROM,
-      logger,
-    })
+  if (env.MAIL_LOCAL_URL === undefined) {
+    return createUnconfiguredMailer()
   }
-  return createUnconfiguredMailer()
+  if (env.ENVIRONMENT !== 'local') {
+    throw new Error('MAIL_LOCAL_URL is accepted only when ENVIRONMENT is local')
+  }
+  return createMailpitMailer({
+    baseUrl: env.MAIL_LOCAL_URL,
+    from: env.MAIL_LOCAL_FROM ?? DEFAULT_LOCAL_MAIL_FROM,
+    logger,
+  })
 }
 
 /** The single composition root: the only place adapters and process-wide objects are constructed. */

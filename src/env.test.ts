@@ -190,13 +190,17 @@ describe('the local mail settings', () => {
   }
 
   test.each([
-    'http://127.0.0.1:8025',
-    'http://127.0.0.1:8025/',
-    'http://localhost:8025',
-    'http://[::1]:8025',
-    'http://LOCALHOST',
-  ])('local accepts the mailbox at %s', (url) => {
-    expect(loadEnv({ ...LOCAL, MAIL_LOCAL_URL: url }).MAIL_LOCAL_URL).toBe(url)
+    ['http://127.0.0.1:8025', 'http://127.0.0.1:8025'],
+    ['http://127.0.0.1:8025/', 'http://127.0.0.1:8025'],
+    ['http://127.0.0.1', 'http://127.0.0.1'],
+    ['http://localhost:8025', 'http://localhost:8025'],
+    ['http://[::1]:8025', 'http://[::1]:8025'],
+    ['http://[::1]/', 'http://[::1]'],
+    ['http://LOCALHOST', 'http://localhost'],
+    ['http://LocalHost:1/', 'http://localhost:1'],
+    ['http://127.0.0.1:65535', 'http://127.0.0.1:65535'],
+  ])('local accepts the mailbox at %s and keeps the canonical origin', (url, canonical) => {
+    expect(loadEnv({ ...LOCAL, MAIL_LOCAL_URL: url }).MAIL_LOCAL_URL).toBe(canonical)
   })
 
   test('local runs with neither mail setting, and accepts a sender under .test', () => {
@@ -227,6 +231,25 @@ describe('the local mail settings', () => {
     ['a fragment', 'http://127.0.0.1:8025/#x'],
     ['no URL at all', 'not a url'],
     ['an empty value', ''],
+    ['a short IPv4 form', 'http://127.1'],
+    ['a decimal IPv4 form', 'http://2130706433'],
+    ['a hexadecimal IPv4 form', 'http://0x7f.0.0.1'],
+    ['an octal IPv4 form', 'http://0177.0.0.1'],
+    ['a padded IPv4 form', 'http://127.000.000.1'],
+    ['a long IPv6 form', 'http://[0:0:0:0:0:0:0:1]:8025'],
+    ['an absolute host name', 'http://127.0.0.1.'],
+    ['an absolute localhost', 'http://localhost.:8025'],
+    ['a scheme without slashes', 'http:localhost'],
+    ['an upper-case scheme', 'HTTP://localhost:8025'],
+    ['a backslash form', 'http:\\\\localhost'],
+    ['a leading space', ' http://localhost:8025'],
+    ['a trailing space', 'http://localhost:8025 '],
+    ['a trailing newline', 'http://localhost:8025\n'],
+    ['a full-width host', 'http://ｌｏｃａｌｈｏｓｔ:8025'],
+    ['port 0', 'http://127.0.0.1:0'],
+    ['a port above 65535', 'http://127.0.0.1:65536'],
+    ['a zero-padded port', 'http://127.0.0.1:08025'],
+    ['an empty port', 'http://127.0.0.1:'],
   ])('local refuses %s', (_name, url) => {
     expect(() => loadEnv({ ...LOCAL, MAIL_LOCAL_URL: url })).toThrow(/MAIL_LOCAL_URL/)
   })
