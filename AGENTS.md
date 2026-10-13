@@ -95,9 +95,7 @@ no `Retry-After`, reported once per attempt, the try stays spent. Calls to core 
 (`CORE_CONCURRENCY`, `CORE_QUEUE`); past the cap a call is 503 at once. They go through the kit's
 `createInternalClient` (ADR 0013), never `fetch`, so no proxy variable can reroute them, and the
 service refuses to boot with `NODE_TLS_REJECT_UNAUTHORIZED=0` outside `local`; the adapter owns
-retrying (the client is built with one attempt). Known gap: the client returns no headers, so
-an abandon 503 no longer carries core's `Retry-After` (the abandon loop paces itself) until kit
-returns it.
+retrying (the client is built with one attempt). On an abandon 503 the adapter passes core's `Retry-After` (kit `retryAfterMs`) on and the abandon loop caps the pause at 1 s.
 
 Sign-up safety: the user id and the idempotency key `signup:<attempt id>` are fixed when the
 attempt starts, and `verify-email` holds no database transaction across the call to core. Order:
