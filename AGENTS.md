@@ -139,9 +139,16 @@ scenarios against real Postgres as the `closeline_auth` role (`POSTGRES_PORT` mo
   lockout are per-process memory (`MemoryRateLimiter`, `MemoryLockout`), so with N instances an
   attacker gets N times the free guesses and sends, and every deploy or crash resets the counts.
   This breaks "state lives in Postgres, the queue or the cache"; moving them needs a table in a
-  `tula-closeline-db` release (a separate ticket). Until then both maps are capped at 50,000 keys:
-  expired keys go first, then the oldest key that is not locked or at its limit; a locked key is
-  never evicted, and if every key is locked a new key is refused (fails closed).
+  `tula-closeline-db` release (a separate ticket, hub issue 30). Until then both maps are capped
+  at 50,000 keys. At the cap an insert looks at the front of the map only (64 keys, so it costs a
+  bounded amount): the oldest key that is not locked or at its limit goes; a locked key is never
+  evicted, and if the keys looked at are all locked a new key is refused (fails closed).
+- **Known limitations of the per-process cap (go away with hub issue 30; pinned by tests named
+  KNOWN LIMITATION).** Churn resets lockout: a key below its lockout is evicted after about
+  50,000 newer keys, so 5 guesses per roughly 100,000 cheap requests is possible. Filling the cap
+  with locked keys (about 1,000 requests a second for 20 minutes) refuses sign-in for new
+  addresses, and with send buckets at their limit (about 70 requests a second) refuses sign-up
+  for new addresses. The per-source limit at the edge (below) is what makes both expensive.
 - **A stranger can lock a victim out of password sign-in.** Lockout is keyed by address and counted
   up front, so about 11 wrong tries on someone's address (then one every 15 minutes) keep their
   correct password refused (429 `rate.limited`) until the failures are forgotten after an hour of

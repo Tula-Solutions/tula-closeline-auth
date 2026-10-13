@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { decodeJwt } from 'jose'
 import { formatId, type UserId } from 'tula-closeline-contract'
+import { MemoryRateLimiter } from '~/adapters/memory/rate-limiter'
 import { createApp } from '~/app'
 import { AUTH_ERRORS } from '~/errors'
 import { type ConcurrencyLimiter, Saturated } from '~/lib/concurrency'
@@ -1006,5 +1007,24 @@ describe('a request that is shed is never counted against anyone', () => {
 
     expect(shed.status).toBe(503)
     expect(after.status).toBe(401)
+  })
+})
+
+describe('what the per-process counters allow while they are full', () => {
+  test('KNOWN LIMITATION: with every send bucket at its limit, a sign-up for a new address is refused', async () => {
+    // The rate limiter never evicts a bucket at its limit (that would grant more sends), so a
+    // flood that fills the cap with such buckets denies sign-up to addresses nobody has used.
+    // Fixed by moving the counters to Postgres (hub issue 30); this pins the behaviour.
+    const { deps, signUp } = await setup()
+    deps.rateLimiter = new MemoryRateLimiter(deps.clock, { maxKeys: 50 })
+    for (let n = 0; n < 25; n++) {
+      await deps.rateLimiter.hit(`filler${n}:cooldown`, 1, 3_600_000)
+      await deps.rateLimiter.hit(`filler${n}:hourly`, 1, 3_600_000)
+    }
+
+    const reply = await signUp('newcomer@northline.app')
+
+    expect(reply.status).toBe(429)
+    expect(reply.body).toMatchObject({ error: { code: 'verification.too_many_attempts' } })
   })
 })

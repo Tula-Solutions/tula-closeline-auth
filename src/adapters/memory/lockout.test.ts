@@ -3,6 +3,7 @@ import { describeLockout, SUITE_LOCKOUT_POLICY } from '~/adapters/lockout.suite'
 import { FixedClock } from '~/adapters/memory/clock'
 import { MemoryLockout } from '~/adapters/memory/lockout'
 import { CREDENTIAL_LOCKOUT, lockoutDelayMs } from '~/ports/lockout'
+import { countMapIterations } from '~/testing/iterations'
 
 const policy = SUITE_LOCKOUT_POLICY
 
@@ -89,5 +90,110 @@ describe('MemoryLockout', () => {
     expect(newcomer.retryAfterMs).toBeGreaterThan(0)
     expect(again.some((decision) => decision.allowed)).toBe(false)
     expect(lockout.size).toBeLessThanOrEqual(50)
+  })
+
+  describe('at the cap, an insert does bounded work', () => {
+    const KEYS = 5_000
+    /** Far below the size of the map, far above what a bounded look at its front needs. */
+    const BOUND = 300
+
+    async function mostStepsPerInsert(
+      fill: (lockout: MemoryLockout, clock: FixedClock) => Promise<void>
+    ) {
+      const clock = new FixedClock()
+      const lockout = new MemoryLockout(clock, { maxKeys: KEYS })
+      await fill(lockout, clock)
+      expect(lockout.size).toBe(KEYS)
+      let most = 0
+      for (let n = 0; n < 200; n++) {
+        const { steps } = await countMapIterations(() =>
+          lockout.attempt(`newcomer${n}`, policy, clock.now())
+        )
+        most = Math.max(most, steps)
+      }
+      return most
+    }
+
+    test('a map full of keys that are not locked', async () => {
+      const most = await mostStepsPerInsert(async (lockout, clock) => {
+        for (let n = 0; n < KEYS; n++) {
+          await lockout.attempt(`open${n}`, policy, clock.now())
+        }
+      })
+
+      expect(most).toBeLessThan(BOUND)
+    })
+
+    test('a map full of locked keys, which refuses the newcomer', async () => {
+      const most = await mostStepsPerInsert(async (lockout, clock) => {
+        for (let n = 0; n < KEYS; n++) {
+          for (let i = 0; i < 4; i++) {
+            await lockout.attempt(`locked${n}`, policy, clock.now())
+          }
+        }
+      })
+
+      expect(most).toBeLessThan(BOUND)
+    })
+
+    test('a long run of locked keys at the front does not hide the keys behind it', async () => {
+      const clock = new FixedClock()
+      const lockout = new MemoryLockout(clock, { maxKeys: 500 })
+      for (let n = 0; n < 200; n++) {
+        for (let i = 0; i < 4; i++) {
+          await lockout.attempt(`locked${n}`, policy, clock.now())
+        }
+      }
+      for (let n = 0; n < 300; n++) {
+        await lockout.attempt(`open${n}`, policy, clock.now())
+      }
+
+      const decisions = []
+      for (let n = 0; n < 20; n++) {
+        decisions.push((await lockout.attempt(`newcomer${n}`, policy, clock.now())).allowed)
+      }
+
+      // The map is full and the oldest 200 keys are locked: a few newcomers may be refused while
+      // the scan moves past them, but then keys that are not locked are evicted for the rest.
+      expect(decisions.filter(Boolean).length).toBeGreaterThanOrEqual(15)
+    })
+  })
+
+  test('KNOWN LIMITATION: enough other keys evict a key that has failed, and its failures are forgotten', async () => {
+    // The counters are per-process memory with a cap. A key below its lockout is evicted when
+    // the cap is full of newer keys, so an attacker who can send that many cheap requests gets
+    // fresh free tries on a victim. It goes away when the counters move to Postgres (hub issue
+    // 30); this test pins the behaviour so a change to it is a decision, not an accident.
+    const clock = new FixedClock()
+    const lockout = new MemoryLockout(clock, { maxKeys: 100 })
+    for (let n = 0; n < 3; n++) {
+      expect((await lockout.attempt('victim', policy, clock.now())).allowed).toBe(true)
+    }
+    for (let n = 0; n < 100; n++) {
+      await lockout.attempt(`churn${n}`, policy, clock.now())
+    }
+
+    const again = []
+    for (let n = 0; n < 3; n++) {
+      again.push((await lockout.attempt('victim', policy, clock.now())).allowed)
+    }
+
+    expect(again).toEqual([true, true, true])
+  })
+
+  test('KNOWN LIMITATION: a map full of locked keys refuses every new key until one unlocks', async () => {
+    // The same cap, the other way round: locked keys are never evicted, so filling the map with
+    // them denies sign-in to addresses nobody has tried yet. Fixed by the move to Postgres.
+    const clock = new FixedClock()
+    const lockout = new MemoryLockout(clock, { maxKeys: 50 })
+    for (let n = 0; n < 50; n++) {
+      for (let i = 0; i < 4; i++) {
+        await lockout.attempt(`full${n}`, policy, clock.now())
+      }
+    }
+
+    expect((await lockout.attempt('newcomer', policy, clock.now())).allowed).toBe(false)
+    clock.advance(60_000)
+    expect((await lockout.attempt('newcomer', policy, clock.now())).allowed).toBe(true)
   })
 })

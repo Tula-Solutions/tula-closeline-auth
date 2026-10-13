@@ -16,6 +16,12 @@ interface Entry {
 /** Forgotten entries are swept after this many new keys, bounding memory under key churn. */
 const SWEEP_EVERY = 1_000
 
+/**
+ * The most keys an insert at the cap looks at, so a full map costs a bounded amount per insert
+ * however many keys it holds.
+ */
+const SCAN_LIMIT = 64
+
 /** The most keys held at once; one is roughly 150 bytes, so this is about 8 MB. */
 export const MAX_LOCKOUT_KEYS = 50_000
 
@@ -32,14 +38,18 @@ export type MemoryLockoutOptions = {
  * which multiplies the guesses an attacker gets. `RedisLockout` is the adapter for that; this
  * one is used when `REDIS_URL` is unset (`local` and `dev` only) and by unit tests.
  *
- * Memory is bounded: at most `maxKeys` keys. When full, forgotten keys go first, then the oldest
- * key that is not locked right now. A locked key is never evicted, so churn cannot unlock it; if
- * every key is locked, a new key is refused (fails closed) until the first of them unlocks.
+ * Memory is bounded: at most `maxKeys` keys. When full, the oldest key that is not locked right now
+ * is evicted, looking at the front of the map only ({@link SCAN_LIMIT} keys), so an insert at the
+ * cap does bounded work; the periodic sweep removes forgotten keys. A locked key is never
+ * evicted, so churn cannot unlock it; when the keys looked at are all locked, a new key is
+ * refused (fails closed) and the locked keys move to the back, so the next insert looks further.
  */
 export class MemoryLockout implements Lockout {
   readonly #entries: Map<string, Entry>
   readonly #maxKeys: number
   #created: number
+  /** While the clock is before this, every key is locked and a new key is refused outright. */
+  #fullUntil: number
 
   /**
    * @param clock - Time source for sweeping forgotten keys.
@@ -54,6 +64,7 @@ export class MemoryLockout implements Lockout {
     this.#entries = new Map()
     this.#maxKeys = options.maxKeys ?? MAX_LOCKOUT_KEYS
     this.#created = 0
+    this.#fullUntil = 0
   }
 
   /** @inheritdoc */
@@ -96,7 +107,7 @@ export class MemoryLockout implements Lockout {
   }
 
   /**
-   * Frees a slot for a new key if the map is full.
+   * Frees a slot for a new key if the map is full, looking at no more than {@link SCAN_LIMIT} keys.
    *
    * @returns `null` when there is room, otherwise how long until a locked key unlocks.
    */
@@ -104,17 +115,38 @@ export class MemoryLockout implements Lockout {
     if (this.#entries.size < this.#maxKeys) {
       return null
     }
-    this.#sweep()
-    if (this.#entries.size < this.#maxKeys) {
-      return null
+    if (time < this.#fullUntil) {
+      return this.#fullUntil - time
     }
+    const skipped: string[] = []
     let soonestUnlock = Number.POSITIVE_INFINITY
+    let evicted = false
     for (const [key, entry] of this.#entries) {
       if (time >= entry.lockedUntil) {
         this.#entries.delete(key)
-        return null
+        evicted = true
+        break
       }
+      skipped.push(key)
       soonestUnlock = Math.min(soonestUnlock, entry.lockedUntil)
+      if (skipped.length >= SCAN_LIMIT) {
+        break
+      }
+    }
+    // Locked keys looked at go to the back, so the next insert starts past them.
+    for (const key of skipped) {
+      const entry = this.#entries.get(key)
+      if (entry) {
+        this.#entries.delete(key)
+        this.#entries.set(key, entry)
+      }
+    }
+    if (evicted) {
+      return null
+    }
+    if (skipped.length >= this.#entries.size) {
+      // Every key is locked: remember until when, so inserts until then cost nothing.
+      this.#fullUntil = soonestUnlock
     }
     return Math.max(1, soonestUnlock - time)
   }

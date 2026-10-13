@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { FixedClock } from '~/adapters/memory/clock'
 import { MemoryRateLimiter } from '~/adapters/memory/rate-limiter'
 import { describeRateLimiter } from '~/adapters/rate-limiter.suite'
+import { countMapIterations } from '~/testing/iterations'
 
 describeRateLimiter('memory', async () => {
   const clock = new FixedClock()
@@ -76,5 +77,49 @@ describe('MemoryRateLimiter', () => {
     clock.advance(2_000)
 
     expect((await limiter.hit('newcomer', 1, 1_000)).allowed).toBe(true)
+  })
+
+  describe('at the cap, an insert does bounded work', () => {
+    const KEYS = 5_000
+    const BOUND = 300
+
+    async function mostStepsPerInsert(limit: number) {
+      const clock = new FixedClock()
+      const limiter = new MemoryRateLimiter(clock, { maxKeys: KEYS })
+      for (let n = 0; n < KEYS; n++) {
+        for (let i = 0; i < limit; i++) {
+          await limiter.hit(`full${n}`, limit, 3_600_000)
+        }
+      }
+      expect(limiter.size).toBe(KEYS)
+      let most = 0
+      for (let n = 0; n < 200; n++) {
+        const { steps } = await countMapIterations(() =>
+          limiter.hit(`newcomer${n}`, limit, 3_600_000)
+        )
+        most = Math.max(most, steps)
+      }
+      return most
+    }
+
+    test('a map full of buckets below their limit', async () => {
+      // The newcomers' own hits stay below the limit too: ask for a limit above the one filled to.
+      const clock = new FixedClock()
+      const limiter = new MemoryRateLimiter(clock, { maxKeys: KEYS })
+      for (let n = 0; n < KEYS; n++) {
+        await limiter.hit(`open${n}`, 5, 3_600_000)
+      }
+      let most = 0
+      for (let n = 0; n < 200; n++) {
+        const { steps } = await countMapIterations(() => limiter.hit(`newcomer${n}`, 5, 3_600_000))
+        most = Math.max(most, steps)
+      }
+
+      expect(most).toBeLessThan(BOUND)
+    })
+
+    test('a map full of buckets at their limit, which refuses the newcomer', async () => {
+      expect(await mostStepsPerInsert(1)).toBeLessThan(BOUND)
+    })
   })
 })
