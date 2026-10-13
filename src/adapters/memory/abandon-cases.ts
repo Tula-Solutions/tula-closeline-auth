@@ -58,6 +58,12 @@ export function createMemoryAbandonCases(clock: Clock): MemoryAbandonCases {
       })
       return true
     },
+    async find(environmentId, id) {
+      const row = rows.get(id)
+      return row && row.environmentId === environmentId
+        ? { resolved: row.resolvedAt !== null, attempts: row.attempts }
+        : null
+    },
     async learn(environmentId, id, organizationId) {
       const row = rows.get(id)
       if (!row || row.environmentId !== environmentId || row.resolvedAt !== null) {

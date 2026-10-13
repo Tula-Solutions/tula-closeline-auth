@@ -24,11 +24,9 @@ afterAll(async () => {
   await deps.stop()
 })
 beforeEach(async () => {
-  const tenant = Bootstrap.requireTenant(deps)
-  // Resolved cases only can be deleted by the service role; the owner clears the rest.
-  await inEnvironment(owner, tenant.environmentId, (query) =>
-    query('delete from auth.abandon_cases')
-  )
+  // TRUNCATE is not subject to row-level security. A DELETE would not do: the restrictive
+  // delete policy lets even the owner remove resolved rows only, so open cases would leak.
+  await owner.query('truncate table auth.abandon_cases')
 })
 
 type Query = (text: string, values?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>

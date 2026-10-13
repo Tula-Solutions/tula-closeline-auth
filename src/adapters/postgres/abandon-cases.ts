@@ -1,3 +1,4 @@
+import { and, eq } from 'drizzle-orm'
 import { formatId } from 'tula-closeline-contract'
 import {
   ABANDON_CLAIM,
@@ -9,6 +10,7 @@ import {
   type Database,
   withEnvironment,
 } from 'tula-closeline-db'
+import { abandonCases } from 'tula-closeline-db/schema'
 import { isUniqueViolation } from '~/adapters/postgres/errors'
 import { statement } from '~/adapters/postgres/statement'
 import type {
@@ -52,6 +54,17 @@ export function createPostgresAbandonCases(db: Database): AbandonCaseStore {
         return result.rows
       })
       return rows.length > 0
+    },
+
+    async find(environmentId, id) {
+      const [row] = await withEnvironment(db, environmentId, (tx) =>
+        tx
+          .select({ resolvedAt: abandonCases.resolvedAt, attempts: abandonCases.attempts })
+          .from(abandonCases)
+          .where(and(eq(abandonCases.id, id), eq(abandonCases.environmentId, environmentId)))
+          .limit(1)
+      )
+      return row ? { resolved: row.resolvedAt !== null, attempts: row.attempts } : null
     },
 
     async learn(environmentId, id, organizationId): Promise<LearnResult> {

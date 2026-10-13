@@ -101,6 +101,28 @@ export function describeAbandonCases(name: string, setup: () => Promise<AbandonC
       expect(await ctx.store.claim(ctx.b.environmentId, 10, 60_000)).toHaveLength(1)
     })
 
+    test('finds where a case stands: untouched, claimed, resolved, or none', async () => {
+      const one = input()
+      expect(await ctx.store.find(ctx.a.environmentId, one.id)).toBeNull()
+      await ctx.store.record(one)
+      expect(await ctx.store.find(ctx.a.environmentId, one.id)).toEqual({
+        resolved: false,
+        attempts: 0,
+      })
+      expect(await ctx.store.find(ctx.b.environmentId, one.id)).toBeNull()
+      await ctx.age(ctx.a.environmentId, 700)
+      await claim()
+      expect(await ctx.store.find(ctx.a.environmentId, one.id)).toEqual({
+        resolved: false,
+        attempts: 1,
+      })
+      await ctx.store.resolve(ctx.a.environmentId, one.id, 'done')
+      expect(await ctx.store.find(ctx.a.environmentId, one.id)).toEqual({
+        resolved: true,
+        attempts: 1,
+      })
+    })
+
     test('learns the Organization id once; another case holding it is a conflict', async () => {
       const first = input()
       const second = input()

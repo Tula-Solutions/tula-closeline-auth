@@ -42,6 +42,9 @@ export interface AbandonCaseStore {
   /** Records a case once; returns `false` when one already exists for the attempt or Organization. */
   record(input: NewAbandonCase): Promise<boolean>
 
+  /** Reads where a case stands, or `null` when there is none. */
+  find(environmentId: string, id: string): Promise<{ resolved: boolean; attempts: number } | null>
+
   /**
    * Fills in the Organization id, once. `conflict` means another case already holds that
    * Organization id; the caller resolves this case as `gave_up` and reports the ids.

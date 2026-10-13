@@ -120,6 +120,23 @@ async function settle(
   const { id, userId, attemptId } = claimed
   const resolve = (outcome: 'done' | 'refused' | 'gave_up') =>
     deps.abandonCases.resolve(environmentId, id, outcome)
+  /** Resolves as `done` and says which of the three results it was, ids only. */
+  const finish = async (
+    result: 'account_exists' | 'no_organization' | 'abandoned',
+    org?: string | null
+  ) => {
+    if (!(await resolve('done'))) {
+      return 'lost_lease' as const
+    }
+    deps.logger.info('an abandon case was finished', {
+      result,
+      caseId: id,
+      userId,
+      attemptId,
+      organizationId: org ?? null,
+    })
+    return result
+  }
 
   if (claimed.attempts > ABANDON_SWEEP_MAX_ATTEMPTS) {
     if (await resolve('gave_up')) {
@@ -141,7 +158,7 @@ async function settle(
 
   // An account for this user means the sign-up completed: nothing is owed to core.
   if ((await deps.users.findById(environmentId, userId)) !== null) {
-    return (await resolve('done')) ? 'account_exists' : 'lost_lease'
+    return finish('account_exists')
   }
 
   const userUuid = formatId('usr', userId) as UserId
@@ -152,7 +169,7 @@ async function settle(
       found = await membershipOf(deps, userUuid)
     } catch (error) {
       if (isOrganizationDeleted(error)) {
-        return (await resolve('done')) ? 'no_organization' : 'lost_lease'
+        return finish('no_organization')
       }
       deps.logger.warn('the abandon sweep could not look an Organization up', {
         caseId: id,
@@ -163,7 +180,7 @@ async function settle(
     }
     if (found === null) {
       // Core holds no membership for this user id: it made nothing, or already abandoned it.
-      return (await resolve('done')) ? 'no_organization' : 'lost_lease'
+      return finish('no_organization')
     }
     organizationId = found.organizationId
     const learned = await deps.abandonCases.learn(environmentId, id, organizationId)
@@ -204,16 +221,16 @@ async function settle(
     }
     return 'lost_lease'
   }
-  if (await resolve('done')) {
+  const finished = await finish('abandoned', organizationId)
+  if (finished === 'abandoned') {
     deps.logger.warn('an Organization with no owner was abandoned', {
       organizationId,
       userId,
       attemptId,
       caseId: id,
     })
-    return 'abandoned'
   }
-  return 'lost_lease'
+  return finished
 }
 
 /**

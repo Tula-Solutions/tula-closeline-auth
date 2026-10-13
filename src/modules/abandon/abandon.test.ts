@@ -105,7 +105,7 @@ describe('the abandon sweep', () => {
     expect(only().organizationId).toBe(deps.membership.organizations[0]?.organizationId ?? 'none')
   })
 
-  test('a committed account resolves its case in the same step and is never abandoned', async () => {
+  test('a committed account resolves its own case, so a later sweep has nothing to do', async () => {
     const { deps, tenant, start, verify, pastGrace, only } = await setup()
     const { started, code } = await start()
 
@@ -454,5 +454,123 @@ describe('the in-request abandon and its case', () => {
 
     expect(result.abandoned).toBe(1)
     expect(only().outcome).toBe('done')
+  })
+})
+
+describe('what a finished case says', () => {
+  const infoLines = (deps: TestDeps) =>
+    deps.logLines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((entry) => entry.msg === 'an abandon case was finished')
+
+  test('abandoned: one info line with the result and ids only', async () => {
+    const { deps, tenant, crashed, pastGrace } = await setup()
+    const { email, caseId } = await crashed()
+    pastGrace()
+
+    await sweepOnce(deps, tenant)
+
+    const lines = infoLines(deps)
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toMatchObject({ result: 'abandoned', caseId })
+    expect(JSON.stringify(lines)).not.toContain(email)
+  })
+
+  test('account_exists: one info line naming it', async () => {
+    const { deps, tenant, crashed, pastGrace } = await setup()
+    const { email, started } = await crashed()
+    const attempt = await deps.flowAttempts.findById(tenant.environmentId, text(started.body, 'id'))
+    await deps.users.create({
+      id: String(attempt?.state.userId),
+      projectId: tenant.projectId,
+      environmentId: tenant.environmentId,
+      email,
+      emailNormalized: email,
+      emailVerifiedAt: deps.clock.now(),
+      firstName: null,
+      lastName: null,
+      createdAt: deps.clock.now(),
+      identityId: crypto.randomUUID(),
+      credentialId: crypto.randomUUID(),
+      passwordHash: '$argon2id$mine',
+    })
+    pastGrace()
+
+    await sweepOnce(deps, tenant)
+
+    expect(infoLines(deps)).toHaveLength(1)
+    expect(infoLines(deps)[0]).toMatchObject({ result: 'account_exists' })
+  })
+
+  test('no_organization: one info line naming it', async () => {
+    const { deps, tenant, start, verify, pastGrace } = await setup()
+    const { started, code } = await start()
+    deps.membership.breakDown(true)
+    await verify(started, code)
+    deps.membership.breakDown(false)
+    pastGrace()
+
+    await sweepOnce(deps, tenant)
+
+    expect(infoLines(deps)).toHaveLength(1)
+    expect(infoLines(deps)[0]).toMatchObject({ result: 'no_organization' })
+  })
+})
+
+describe('retrying an attempt whose case the sweep or a request already settled', () => {
+  test('a resolved or claimed case with no account fails the request before core is asked', async () => {
+    const { deps, tenant, start, verify, only } = await setup()
+    const { started, code } = await start()
+    await deps.abandonCases.record({
+      id: text(started.body, 'id'),
+      projectId: tenant.projectId,
+      environmentId: tenant.environmentId,
+      organizationId: null,
+      userId: crypto.randomUUID(),
+      attemptId: text(started.body, 'id'),
+      attemptExpiresAt: new Date(deps.clock.now().getTime() + 600_000),
+      graceMs: 30_000,
+    })
+    await deps.abandonCases.resolve(tenant.environmentId, only().id, 'done')
+
+    const reply = await verify(started, code)
+
+    expect(reply.status).toBe(404)
+    expect(reply.body).toMatchObject({ error: { code: 'flow.not_found' } })
+    expect(deps.membership.calls.create).toBe(0)
+  })
+
+  test('a claimed case fails the same way', async () => {
+    const { deps, tenant, start, verify } = await setup()
+    const { started, code } = await start()
+    await deps.abandonCases.record({
+      id: text(started.body, 'id'),
+      projectId: tenant.projectId,
+      environmentId: tenant.environmentId,
+      organizationId: null,
+      userId: crypto.randomUUID(),
+      attemptId: text(started.body, 'id'),
+      attemptExpiresAt: new Date(deps.clock.now().getTime() - 60_000),
+      graceMs: 10_000,
+    })
+    expect(await deps.abandonCases.claim(tenant.environmentId, 1, 60_000)).toHaveLength(1)
+
+    const reply = await verify(started, code)
+
+    expect(reply.status).toBe(404)
+    expect(deps.membership.calls.create).toBe(0)
+  })
+
+  test('an untouched case is a plain retry and goes on', async () => {
+    const { deps, start, verify } = await setup()
+    const { started, code } = await start()
+    const create = deps.users.create.bind(deps.users)
+    deps.users.create = async () => {
+      throw new Error('connection reset')
+    }
+    expect((await verify(started, code)).status).toBe(500)
+    deps.users.create = create
+
+    expect((await verify(started, code)).status).toBe(200)
   })
 })

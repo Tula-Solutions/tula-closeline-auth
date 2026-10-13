@@ -543,7 +543,7 @@ export async function verifyEmail(
   // invitation sign-up joins an Organization with other members and is never recorded.
   const abandonCaseId = join.kind === 'create' ? attempt.id : undefined
   if (abandonCaseId !== undefined) {
-    await deps.abandonCases.record({
+    const recorded = await deps.abandonCases.record({
       id: abandonCaseId,
       projectId: tenant.projectId,
       environmentId: tenant.environmentId,
@@ -553,6 +553,20 @@ export async function verifyEmail(
       attemptExpiresAt: attempt.expiresAt,
       graceMs: ABANDON_GRACE_MS,
     })
+    if (!recorded) {
+      // Already recorded: a retry of this attempt, which is fine while the case is untouched.
+      // A resolved or claimed case means the sweep (or an in-request abandon) has dealt with this
+      // attempt, so an Organization made now would have no case: answer as for an expired attempt.
+      const existing = await deps.abandonCases.find(tenant.environmentId, abandonCaseId)
+      // (A committed account is the exception: a retry after a crash past the commit completes.)
+      if (
+        existing &&
+        (existing.resolved || existing.attempts > 0) &&
+        (await deps.users.findById(tenant.environmentId, userId)) === null
+      ) {
+        throw fail(AUTH_ERRORS['flow.not_found'])
+      }
+    }
   }
   let membership: Awaited<ReturnType<typeof Membership.join>>
   try {
