@@ -28,6 +28,7 @@ import { BATCH_REQUESTS, BATCHES, measure, summary } from './measure'
 const BUDGET_HTTP_MS = 130
 const BUDGET_HTTPS_MS = 160
 
+const tlsUser = formatId('usr', crypto.randomUUID())
 const core = startFakeCore()
 const tlsServers: Server[] = []
 const cert = makeTestCert()
@@ -40,30 +41,52 @@ afterAll(async () => {
   cert?.remove()
 })
 
-/** Times one leg: `userId` must be an Owner at the stand-in. */
-async function lookupLeg(
-  label: string,
-  options: { url: string; token: string; userId: UserId; ca?: string },
-  keepAlive: boolean
-) {
-  const adapter = createHttpMembership({
-    baseUrl: options.url,
-    token: options.token,
+type Leg = { url: string; token: string; userId: UserId; ca?: string }
+
+/** An adapter for a leg; the caller closes it. */
+function adapterFor(leg: Leg, keepAlive: boolean) {
+  return createHttpMembership({
+    baseUrl: leg.url,
+    token: leg.token,
     environment: 'local',
     keepAlive,
-    ...(options.ca === undefined ? {} : { ca: options.ca }),
+    ...(leg.ca === undefined ? {} : { ca: leg.ca }),
   })
+}
+
+/** Times a leg with keep-alive on, in full: this is the gated number. `userId` is an Owner there. */
+async function gatedLeg(label: string, leg: Leg) {
+  const adapter = adapterFor(leg, true)
   try {
     const result = await measure(async () => {
-      const found = await adapter.forUser(options.userId)
+      const found = await adapter.forUser(leg.userId)
       if (found?.role !== 'owner') {
         throw new Error('lookup failed')
       }
     })
-    console.log(
-      summary(`membership lookup (${label}, keep-alive ${keepAlive ? 'on' : 'off'})`, result)
-    )
+    console.log(summary(`membership lookup (${label}, keep-alive on)`, result))
     return result
+  } finally {
+    adapter.close?.()
+  }
+}
+
+/** Lookups timed for the keep-alive-off reference: few, because each one may do a handshake. */
+const REFERENCE_LOOKUPS = 100
+
+/** Times a leg with keep-alive off over {@link REFERENCE_LOOKUPS}, reported per 500; not gated. */
+async function referenceLeg(label: string, leg: Leg): Promise<void> {
+  const adapter = adapterFor(leg, false)
+  try {
+    await adapter.forUser(leg.userId)
+    const started = performance.now()
+    for (let index = 0; index < REFERENCE_LOOKUPS; index++) {
+      await adapter.forUser(leg.userId)
+    }
+    const per500 = ((performance.now() - started) / REFERENCE_LOOKUPS) * BATCH_REQUESTS
+    console.log(
+      `membership lookup (${label}, keep-alive off): about ${per500.toFixed(1)} ms per ${BATCH_REQUESTS} requests (${REFERENCE_LOOKUPS} timed, not gated)`
+    )
   } finally {
     adapter.close?.()
   }
@@ -110,22 +133,45 @@ async function seed(): Promise<UserId> {
   return userId
 }
 
-test(`membership lookup over http: the best of ${BATCHES} batches of ${BATCH_REQUESTS} lookups is within ${BUDGET_HTTP_MS} ms`, async () => {
-  const userId = await seed()
-  const leg = { url: core.url, token: core.secret, userId }
-  const on = await lookupLeg('http', leg, true)
-  await lookupLeg('http', leg, false)
-  expect(on.bestMs).toBeLessThan(BUDGET_HTTP_MS)
-})
+// Each test sets its own timeout, well above its work (gated legs run 4,000 lookups: under 1 s
+// locally, several seconds on a slow runner), because Bun's default of 5 s is not headroom.
+const GATED_TIMEOUT_MS = 60_000
+const REFERENCE_TIMEOUT_MS = 60_000
 
-test(`membership lookup over https: the best of ${BATCHES} batches of ${BATCH_REQUESTS} lookups is within ${BUDGET_HTTPS_MS} ms`, async () => {
-  if (cert === undefined) {
-    console.log('membership lookup over https: skipped, openssl could not make a certificate')
-    return
-  }
-  const tls = await startTlsCore()
-  const leg = { ...tls, token: 'k'.repeat(40), userId: formatId('usr', crypto.randomUUID()) }
-  const on = await lookupLeg('https', leg, true)
-  await lookupLeg('https', leg, false)
-  expect(on.bestMs).toBeLessThan(BUDGET_HTTPS_MS)
-})
+test(
+  `membership lookup over http: the best of ${BATCHES} batches of ${BATCH_REQUESTS} lookups is within ${BUDGET_HTTP_MS} ms`,
+  async () => {
+    const userId = await seed()
+    const on = await gatedLeg('http', { url: core.url, token: core.secret, userId })
+    expect(on.bestMs).toBeLessThan(BUDGET_HTTP_MS)
+  },
+  GATED_TIMEOUT_MS
+)
+
+test(
+  `membership lookup over https: the best of ${BATCHES} batches of ${BATCH_REQUESTS} lookups is within ${BUDGET_HTTPS_MS} ms`,
+  async () => {
+    if (cert === undefined) {
+      console.log('membership lookup over https: skipped, openssl could not make a certificate')
+      return
+    }
+    const tls = await startTlsCore()
+    const on = await gatedLeg('https', { ...tls, token: 'k'.repeat(40), userId: tlsUser })
+    expect(on.bestMs).toBeLessThan(BUDGET_HTTPS_MS)
+  },
+  GATED_TIMEOUT_MS
+)
+
+test(
+  'membership lookup, keep-alive off (reference, not gated)',
+  async () => {
+    const userId = await seed()
+    await referenceLeg('http', { url: core.url, token: core.secret, userId })
+    if (cert === undefined) {
+      return
+    }
+    const tls = await startTlsCore()
+    await referenceLeg('https', { ...tls, token: 'k'.repeat(40), userId: tlsUser })
+  },
+  REFERENCE_TIMEOUT_MS
+)
