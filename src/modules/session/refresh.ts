@@ -24,6 +24,38 @@ function plausible(token: string): boolean {
 }
 
 /**
+ * Applies again, after the call to core, what a replay was let through on: the session has not
+ * ended or expired, the user is not banned, and the next token has not been spent. The grace
+ * window is not measured again: a client that retried inside it is not reuse because core was slow.
+ */
+async function recheckReplay(
+  deps: SessionDeps,
+  tenant: Tenant,
+  tokenHash: string,
+  now: Date
+): Promise<void> {
+  const found = await deps.sessions.findToken(tenant.environmentId, tokenHash)
+  if (!found) {
+    throw fail(AUTH_ERRORS['session.invalid_token'])
+  }
+  const { token, session } = found
+  rejectEnded(session, now)
+  const user = await deps.users.findById(tenant.environmentId, session.userId)
+  if (!user || user.bannedAt !== null) {
+    await deps.sessions.revoke(tenant.environmentId, session.id, 'user_banned', now)
+    throw fail(AUTH_ERRORS['auth.user_banned'])
+  }
+  const child = token.replacedById
+    ? await deps.sessions.findTokenById(tenant.environmentId, token.replacedById)
+    : null
+  if (!child || child.usedAt !== null) {
+    await deps.sessions.revoke(tenant.environmentId, session.id, 'reuse_detected', now)
+    deps.logger.warn('refresh token reuse detected; session revoked', { sessionId: session.id })
+    throw fail(AUTH_ERRORS['session.reuse_detected'])
+  }
+}
+
+/**
  * Trades a refresh token for a new access token and the next refresh token.
  *
  * Each refresh token works once. Presented again within the grace period it returns the same
@@ -32,7 +64,9 @@ function plausible(token: string): boolean {
  * owner cannot be told apart. The user's Organization is read again on every refresh, so a role
  * change reaches the next token. What needs no answer from core (an ended session, a spent token
  * past its grace, an expired token) is decided before core is asked, and core is asked once per
- * request; the clock is read again after the answer for the times the new tokens carry.
+ * request; the clock is read again after the answer for the times the new tokens carry, and a
+ * replay and a rotation are each checked again then (the session may have ended or expired, the
+ * user been banned, the next token been spent, while core was being asked).
  *
  * @param onNoOrganization - Told the user id when the account has no Organization (reported).
  * @throws AppError `session.invalid_token`, `session.revoked`, `session.reuse_detected`,
@@ -87,6 +121,7 @@ export async function refresh(
       throw fail(AUTH_ERRORS['session.expired'])
     }
 
+    const askedNow = asked === undefined
     if (asked === undefined) {
       try {
         asked = { membership: await Membership.of(deps, formatId('usr', session.userId) as UserId) }
@@ -121,9 +156,22 @@ export async function refresh(
     const now = deps.clock.now()
 
     if (replay) {
+      // Core may have taken seconds: what was true before the call may not be now, so the
+      // session, the user and the next token are read again before the same next token is
+      // handed out (a lost race that already waited on core in this request needs no re-read).
+      if (askedNow) {
+        await recheckReplay(deps, tenant, tokenHash, now)
+      }
       // The first response may have been lost: the same next token is returned.
       const access = await sign(tokenSession, membership, now)
       return issued(session.id, access, await deriveToken(deps, { parentId: token.id }), membership)
+    }
+
+    // The token and the session may have run out while core was being asked; the rotation's
+    // compare-and-set does not look at expiry, so it is decided here, from the rows already read.
+    rejectEnded(session, now)
+    if (token.expiresAt.getTime() <= now.getTime()) {
+      throw fail(AUTH_ERRORS['session.expired'])
     }
 
     const idleExpiresAt = idleExpiry(now, session.absoluteExpiresAt)
