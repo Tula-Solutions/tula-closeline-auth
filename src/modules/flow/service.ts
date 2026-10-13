@@ -440,6 +440,10 @@ export async function verifyEmail(
   // Core keeps a copy of the verified address (as normalized, the form its checks fold to) and
   // the person's name for the member list (ADR 0015).
   const memberName = composeMemberName(state.firstName, state.lastName)
+  if (memberName === null && [state.firstName, state.lastName].some((part) => part?.trim())) {
+    // A name was given but nothing of it can go to core: say so by attempt id, never the value.
+    deps.logger.warn('a name could not be sent to core', { attemptId: attempt.id })
+  }
   const join: Membership.JoinRequest = state.organizationName
     ? {
         kind: 'create',

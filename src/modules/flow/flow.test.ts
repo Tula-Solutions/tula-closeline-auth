@@ -1567,4 +1567,36 @@ describe('what core is told about the person (ADR 0015)', () => {
     expect(everything).not.toContain('Quillfeather')
     expect(everything).not.toContain(email)
   })
+
+  test('a name that cannot be sent is logged by attempt id, never by value, and the sign-up still works', async () => {
+    const { deps, signUp, verify, nextEmail } = await setup()
+    const email = nextEmail()
+    const started = await signUp(email, {
+      organizationName: 'Northline',
+      firstName: '\u0007\u0007',
+      lastName: '\u0001',
+    })
+
+    const done = await verify(started, emailedCode(deps, email))
+
+    expect(done.status).toBe(200)
+    expect(deps.membership.profiles.map((p) => p.name)).toEqual([null])
+    const lines = deps.logLines.map((line) => JSON.parse(line) as Record<string, unknown>)
+    const warning = lines.find(
+      (l) => l.level === 40 && l.msg === 'a name could not be sent to core'
+    )
+    expect(warning).toMatchObject({ attemptId: text(started.body, 'id') })
+    expect(deps.logLines.join('\n')).not.toContain('\\u0007')
+    expect(deps.logLines.join('\n')).not.toContain('\u0007')
+  })
+
+  test('an absent or blank name is not logged as a fallback', async () => {
+    const { deps, signUp, verify, nextEmail } = await setup()
+    const email = nextEmail()
+    const started = await signUp(email, { organizationName: 'Northline', firstName: '  ' })
+
+    await verify(started, emailedCode(deps, email))
+
+    expect(deps.logLines.join('\n')).not.toContain('a name could not be sent to core')
+  })
 })
