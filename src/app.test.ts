@@ -19,7 +19,11 @@ test('the app serves its OpenAPI document describing every route and the error b
   const document = (await response.json()) as ServedDocument
   expect(document.openapi).toBe('3.1.0')
   expect(document.info.title).toBe(SERVICE)
-  expect(Object.keys(document.paths).sort()).toEqual(['/healthz', '/readyz'])
+  expect(Object.keys(document.paths).sort()).toEqual([
+    '/.well-known/jwks.json',
+    '/healthz',
+    '/readyz',
+  ])
   expect(document.paths['/healthz']?.get.responses['500']).toBeDefined()
   expect(document.paths['/readyz']?.get.responses['503']).toBeDefined()
   expect(JSON.stringify(document.paths['/healthz']?.get.responses['500'])).toContain('code')

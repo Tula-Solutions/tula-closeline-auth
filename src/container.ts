@@ -8,13 +8,19 @@ import {
   type Logger,
   systemClock,
 } from 'tula-closeline-kit'
+import { createPlaceholderMembership } from '~/adapters/placeholder/membership'
 import { createPostgresFixedProject } from '~/adapters/postgres/fixed-project'
+import { createPostgresSigningKeyStore } from '~/adapters/postgres/signing-keys'
 import { uuidV7Ids } from '~/adapters/system/ids'
 import { describeError } from '~/describe-error'
-import { databaseUrl, type Env, loadEnv } from '~/env'
+import { databaseUrl, type Env, loadEnv, masterKey } from '~/env'
 import { SERVICE } from '~/info'
+import { createKeyedHash, type KeyedHash } from '~/lib/keyed-hash'
+import { createSecretBox, type SecretBox } from '~/lib/secret-box'
 import type { FixedProject, Tenant } from '~/ports/fixed-project'
 import type { IdGenerator } from '~/ports/id-generator'
+import type { MembershipClaims } from '~/ports/membership'
+import type { SigningKeyStore } from '~/ports/signing-key-store'
 
 /** One dependency probe for `/readyz`: resolve when healthy, reject or stall when not. */
 export type ReadinessCheck = {
@@ -57,6 +63,14 @@ export type Container = {
   fixedProject: FixedProject
   /** The tenant this deployment serves, set once bootstrapping has run. */
   tenant: { current?: Tenant }
+  /** Signing keys, sealed with the master key. */
+  signingKeys: SigningKeyStore
+  /** Seals secrets at rest with keys derived from `AUTH_MASTER_KEY`. */
+  secretBox: SecretBox
+  /** HMACs for low-entropy secrets and derived tokens, keyed from `AUTH_MASTER_KEY`. */
+  keyedHash: KeyedHash
+  /** Organization and role for a token, from the core service. */
+  membership: MembershipClaims
   /** Releases what the container holds (database connections); call once on shutdown. */
   close: () => Promise<void>
 }
@@ -120,6 +134,11 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     ids: uuidV7Ids,
     fixedProject: createPostgresFixedProject(database.db),
     tenant,
+    signingKeys: createPostgresSigningKeyStore(database.db),
+    secretBox: createSecretBox(masterKey(env)),
+    keyedHash: createKeyedHash(masterKey(env)),
+    // Placeholder until the core service exists (ticket 1.9); it never invents a membership.
+    membership: createPlaceholderMembership(),
     close: database.close,
     reportError: (error, context) => {
       logger.error('unhandled error', { ...context, error: describeError(error) })

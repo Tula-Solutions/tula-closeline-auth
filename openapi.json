@@ -184,6 +184,98 @@
           }
         }
       }
+    },
+    "/.well-known/jwks.json": {
+      "get": {
+        "tags": ["keys"],
+        "summary": "Public signing keys",
+        "description": "The Ed25519 public keys that verify this service’s access tokens: `next`, `active` and recently retired keys, at most 20, public parameters only. A new key is listed at least five minutes before it signs.",
+        "responses": {
+          "200": {
+            "description": "The key set.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "keys": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "kty": {
+                            "type": "string",
+                            "enum": ["OKP"]
+                          },
+                          "crv": {
+                            "type": "string",
+                            "enum": ["Ed25519"]
+                          },
+                          "x": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "kid": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "alg": {
+                            "type": "string",
+                            "enum": ["EdDSA"]
+                          },
+                          "use": {
+                            "type": "string",
+                            "enum": ["sig"]
+                          }
+                        },
+                        "required": ["kty", "crv", "x", "kid", "alg", "use"],
+                        "additionalProperties": false
+                      },
+                      "maxItems": 20
+                    }
+                  },
+                  "required": ["keys"]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Something went wrong on our side.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": ["code", "message"]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "webhooks": {}

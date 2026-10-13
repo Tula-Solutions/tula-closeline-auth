@@ -3,11 +3,13 @@ import { createContainer } from '~/container'
 import { describeError } from '~/describe-error'
 import { serveOptions } from '~/http/serve'
 import * as Bootstrap from '~/modules/bootstrap/service'
+import * as Jwks from '~/modules/jwks/service'
 import { shutdown } from '~/shutdown'
 
 const container = createContainer()
 try {
-  await Bootstrap.start(container)
+  const tenant = await Bootstrap.start(container)
+  await Jwks.ensureAtBoot(container, tenant)
 } catch (error) {
   // Refuse to serve rather than run against a Region that has no, or more than one, project.
   container.logger.error('bootstrap failed', { error: describeError(error) })

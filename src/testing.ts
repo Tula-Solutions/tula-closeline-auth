@@ -1,9 +1,14 @@
 import { createFixedClock, createLogger, type FixedClock } from 'tula-closeline-kit'
 import { createMemoryFixedProject } from '~/adapters/memory/fixed-project'
+import { createMemoryMembership, type MemoryMembership } from '~/adapters/memory/membership'
+import { createMemorySigningKeyStore } from '~/adapters/memory/signing-keys'
 import { uuidV7Ids } from '~/adapters/system/ids'
 import type { Container, ErrorContext, ReadinessCheck } from '~/container'
-import { loadEnv } from '~/env'
+import { loadEnv, masterKey } from '~/env'
 import { SERVICE } from '~/info'
+import { createKeyedHash } from '~/lib/keyed-hash'
+import { createSecretBox } from '~/lib/secret-box'
+import * as Bootstrap from '~/modules/bootstrap/service'
 
 /** The container plus the observable side effects a test asserts on. */
 export type TestDeps = Container & {
@@ -12,6 +17,8 @@ export type TestDeps = Container & {
   logLines: string[]
   /** Every call to `reportError`, in order. */
   reported: { error: unknown; context: ErrorContext }[]
+  /** The memory membership service, with the controls to arrange and break it. */
+  membership: MemoryMembership
 }
 
 /** Builds a container of in-memory doubles and a fixed clock; `overrides` replace any field. */
@@ -20,17 +27,18 @@ export function createTestDeps(
 ): TestDeps {
   const logLines: string[] = []
   const reported: TestDeps['reported'] = []
+  const env = loadEnv({
+    ENVIRONMENT: 'local',
+    REGION: 'eu',
+    LOG_LEVEL: 'debug',
+    DATABASE_URL: 'postgres://closeline_auth:unused@127.0.0.1:1/closeline',
+    AUTH_MASTER_KEY: 'ab'.repeat(32),
+    PUBLIC_URL: 'https://auth.test.example.com',
+    ...overrides.env,
+  })
 
   return {
-    env: loadEnv({
-      ENVIRONMENT: 'local',
-      REGION: 'eu',
-      LOG_LEVEL: 'debug',
-      DATABASE_URL: 'postgres://closeline_auth:unused@127.0.0.1:1/closeline',
-      AUTH_MASTER_KEY: 'ab'.repeat(32),
-      PUBLIC_URL: 'https://auth.test.example.com',
-      ...overrides.env,
-    }),
+    env,
     logger: createLogger({
       service: SERVICE,
       level: 'debug',
@@ -42,6 +50,10 @@ export function createTestDeps(
     ids: uuidV7Ids,
     fixedProject: createMemoryFixedProject(),
     tenant: {},
+    signingKeys: createMemorySigningKeyStore(),
+    secretBox: createSecretBox(masterKey(env)),
+    keyedHash: createKeyedHash(masterKey(env)),
+    membership: createMemoryMembership(),
     close: async () => {},
     reportError: (error, context) => {
       reported.push({ error, context })
@@ -49,4 +61,13 @@ export function createTestDeps(
     logLines,
     reported,
   }
+}
+
+/** Like {@link createTestDeps}, with the fixed project already bootstrapped (the normal case). */
+export async function createReadyDeps(
+  overrides: Parameters<typeof createTestDeps>[0] = {}
+): Promise<TestDeps> {
+  const deps = createTestDeps(overrides)
+  await Bootstrap.start(deps)
+  return deps
 }
