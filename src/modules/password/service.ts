@@ -1,5 +1,6 @@
+import { AUTH_ERRORS } from 'tula-closeline-contract'
 import type { Container } from '~/container'
-import { AUTH_ERRORS, fail, Overloaded } from '~/errors'
+import { fail, Overloaded } from '~/errors'
 import { type ConcurrencyLimiter, Saturated } from '~/lib/concurrency'
 import {
   evaluatePassword,
@@ -26,14 +27,6 @@ const CURRENT_PREFIX = `$argon2id$v=19$m=${HASH_OPTIONS.memoryCost},t=${HASH_OPT
 
 /** A raw password longer than this is refused before it is normalized (NFC can shrink, not grow much). */
 const MAX_RAW_LENGTH = MAX_PASSWORD_LENGTH * 16
-
-/** The `password.*` codes the fixed policy can fail with, mapped to the registry. */
-const POLICY_ERRORS = {
-  'password.too_short': AUTH_ERRORS['password.too_short'],
-  'password.too_long': AUTH_ERRORS['password.too_long'],
-  'password.contains_user_info': AUTH_ERRORS['password.contains_user_info'],
-  'password.common': AUTH_ERRORS['password.common'],
-} as const
 
 /** What password work needs from the container: the limiters that bound it. */
 export type PasswordDeps = Pick<Container, 'limits'>
@@ -130,8 +123,7 @@ export function checkPolicy(password: string, userInfo: PasswordUserInfo = {}): 
   )
   const [first] = failed
   if (first) {
-    const definition = POLICY_ERRORS[first.code as keyof typeof POLICY_ERRORS]
-    throw fail(definition ?? AUTH_ERRORS['password.too_short'], {
+    throw fail(AUTH_ERRORS[first.code], {
       ...(first.params ?? {}),
       errors: failed.map(fieldError),
     })

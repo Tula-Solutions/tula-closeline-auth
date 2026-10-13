@@ -1,6 +1,6 @@
-import { formatId, type UserId } from 'tula-closeline-contract'
+import { AUTH_ERRORS, formatId, type UserId } from 'tula-closeline-contract'
 import type { Container } from '~/container'
-import { AUTH_ERRORS, fail } from '~/errors'
+import { fail } from '~/errors'
 import { sha256Hex } from '~/lib/crypto'
 import * as Membership from '~/modules/membership/service'
 import * as Tokens from '~/modules/token/service'

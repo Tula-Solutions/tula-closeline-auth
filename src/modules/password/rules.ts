@@ -1,59 +1,30 @@
 /**
  * The password rule engine: evaluates a password against a policy. Ported from the source
  * product's contract package (`password-rules.ts`) with the policy fixed to the `recommended`
- * preset; the rule logic is unchanged.
+ * preset. Only the rules that preset turns on are kept (length, user info, common passwords), so
+ * every code a rule can fail with is one of `AUTH_ERRORS` in `tula-closeline-contract`.
  */
+import type { AuthErrorCode } from 'tula-closeline-contract'
 import { COMMON_PASSWORDS } from './common-passwords'
 
 /** The rules a password is checked against. */
 export interface PasswordPolicy {
   minLength: number
   maxLength: number
-  requireLowercase: boolean
-  requireUppercase: boolean
-  requireNumber: boolean
-  requireSpecial: boolean
-  /** Minimum distinct classes (lower, upper, number, special); 0 disables the rule. */
-  minCharacterClasses: number
-  specialChars: string
   disallowUserInfo: boolean
   disallowCommon: boolean
   /** Whether a password found in a breach corpus is refused (`block`), allowed (`off`). */
   breachCheck: 'off' | 'block'
-  maxRepeatedChars: number | null
-  blockSequences: boolean
 }
 
-/** ASCII punctuation counted as "special" by default. */
-export const DEFAULT_SPECIAL_CHARS = '!@#$%^&*()-_=+[]{};:,.?/\\|\'"`~<>'
-
 /** Rule identifiers shown in the live checklist. */
-export type PasswordRule =
-  | 'min_length'
-  | 'max_length'
-  | 'lowercase'
-  | 'uppercase'
-  | 'number'
-  | 'special'
-  | 'character_classes'
-  | 'user_info'
-  | 'common'
-  | 'repeated_characters'
-  | 'sequence'
+export type PasswordRule = 'min_length' | 'max_length' | 'user_info' | 'common'
 
-/** The `password.*` codes a rule can fail with. */
-export type PasswordErrorCode =
-  | 'password.too_short'
-  | 'password.too_long'
-  | 'password.missing_lowercase'
-  | 'password.missing_uppercase'
-  | 'password.missing_number'
-  | 'password.missing_special'
-  | 'password.too_few_character_classes'
-  | 'password.contains_user_info'
-  | 'password.common'
-  | 'password.repeated_characters'
-  | 'password.sequence'
+/** The `password.*` codes a rule can fail with; each is a code of the contract's `AUTH_ERRORS`. */
+export type PasswordErrorCode = Extract<
+  AuthErrorCode,
+  'password.too_short' | 'password.too_long' | 'password.contains_user_info' | 'password.common'
+>
 
 /** The result of one rule. */
 export interface PasswordCheck {
@@ -96,36 +67,7 @@ export function normalizePassword(password: string): string {
   return password.normalize('NFC')
 }
 
-const LOWER = /\p{Ll}/u
-const UPPER = /\p{Lu}/u
-const NUMBER = /\p{Nd}/u
-const SEQUENCE_LENGTH = 4
 const MIN_USER_INFO_LENGTH = 3
-
-function longestRun(chars: readonly string[]): number {
-  let longest = 0
-  let current = 0
-  for (let i = 0; i < chars.length; i++) {
-    current = i > 0 && chars[i] === chars[i - 1] ? current + 1 : 1
-    longest = Math.max(longest, current)
-  }
-  return longest
-}
-
-function hasSequence(chars: readonly string[]): boolean {
-  const codes = chars.map((c) => c.toLowerCase().codePointAt(0) ?? 0)
-  let ascending = 1
-  let descending = 1
-  for (let i = 1; i < codes.length; i++) {
-    const step = (codes[i] ?? 0) - (codes[i - 1] ?? 0)
-    ascending = step === 1 ? ascending + 1 : 1
-    descending = step === -1 ? descending + 1 : 1
-    if (ascending >= SEQUENCE_LENGTH || descending >= SEQUENCE_LENGTH) {
-      return true
-    }
-  }
-  return false
-}
 
 function userInfoTokens(info: PasswordUserInfo): string[] {
   const localPart = info.email?.split('@')[0]
@@ -158,11 +100,6 @@ export function evaluatePassword(
   userInfo: PasswordUserInfo = {}
 ): PasswordEvaluation {
   const chars = [...normalizePassword(password)]
-  const special = new Set([...policy.specialChars])
-  const hasLower = chars.some((c) => LOWER.test(c))
-  const hasUpper = chars.some((c) => UPPER.test(c))
-  const hasNumber = chars.some((c) => NUMBER.test(c))
-  const hasSpecial = chars.some((c) => special.has(c))
   const checks: PasswordCheck[] = []
 
   checks.push({
@@ -177,27 +114,6 @@ export function evaluatePassword(
     passed: chars.length <= policy.maxLength,
     params: { max: policy.maxLength },
   })
-  if (policy.requireLowercase) {
-    checks.push({ rule: 'lowercase', code: 'password.missing_lowercase', passed: hasLower })
-  }
-  if (policy.requireUppercase) {
-    checks.push({ rule: 'uppercase', code: 'password.missing_uppercase', passed: hasUpper })
-  }
-  if (policy.requireNumber) {
-    checks.push({ rule: 'number', code: 'password.missing_number', passed: hasNumber })
-  }
-  if (policy.requireSpecial) {
-    checks.push({ rule: 'special', code: 'password.missing_special', passed: hasSpecial })
-  }
-  if (policy.minCharacterClasses > 0) {
-    const classes = [hasLower, hasUpper, hasNumber, hasSpecial].filter(Boolean).length
-    checks.push({
-      rule: 'character_classes',
-      code: 'password.too_few_character_classes',
-      passed: classes >= policy.minCharacterClasses,
-      params: { min: policy.minCharacterClasses },
-    })
-  }
   if (policy.disallowUserInfo) {
     const lower = chars.join('').toLowerCase()
     checks.push({
@@ -213,17 +129,6 @@ export function evaluatePassword(
       passed: !COMMON_PASSWORDS.has(chars.join('').toLowerCase()),
     })
   }
-  if (policy.maxRepeatedChars !== null) {
-    checks.push({
-      rule: 'repeated_characters',
-      code: 'password.repeated_characters',
-      passed: longestRun(chars) <= policy.maxRepeatedChars,
-      params: { max: policy.maxRepeatedChars },
-    })
-  }
-  if (policy.blockSequences) {
-    checks.push({ rule: 'sequence', code: 'password.sequence', passed: !hasSequence(chars) })
-  }
 
   return { ok: checks.every((check) => check.passed), checks }
 }
@@ -232,15 +137,7 @@ export function evaluatePassword(
 export const PASSWORD_POLICY: PasswordPolicy = {
   minLength: 10,
   maxLength: 128,
-  requireLowercase: false,
-  requireUppercase: false,
-  requireNumber: false,
-  requireSpecial: false,
-  minCharacterClasses: 0,
-  specialChars: DEFAULT_SPECIAL_CHARS,
   disallowUserInfo: true,
   disallowCommon: true,
   breachCheck: 'block',
-  maxRepeatedChars: null,
-  blockSequences: false,
 }
