@@ -318,19 +318,6 @@ export async function reportOrphan(
   }
 }
 
-/** Whether the user has an account: `undefined` when that could not be read. Never throws. */
-async function accountExists(
-  deps: Pick<Container, 'users'>,
-  tenant: Tenant,
-  userId: string
-): Promise<boolean | undefined> {
-  try {
-    return (await deps.users.findById(tenant.environmentId, userId)) !== null
-  } catch {
-    return undefined
-  }
-}
-
 /**
  * Deals with an Organization that core made for a sign-up whose account was not written: asks core
  * to abandon it (when `abandon` is true) with the key `abandon:<attempt id>`, and reports it to
@@ -494,15 +481,18 @@ export async function verifyEmail(
     throw error
   }
   // From here core has made an Organization: if the account is not written, nobody owns it.
-  // An Owner's Organization is abandoned at once; an accepted Invitation joined an Organization
-  // with other members, which core would refuse to abandon, so that case is only reported.
-  const orphan = (why: string, status: number) =>
-    settleOrphan(deps, context, status, {
+  // The request abandons it in exactly one case (below): the address is held by a different
+  // user. Every other failure is only reported, because nothing in this process can prove the
+  // account will never be written while the attempt is still usable (a double submit of the same
+  // attempt, or a commit that outlived a dropped connection, would make the abandon delete a
+  // working Owner's Organization). Abandoning those is left to a sweep that waits until the
+  // attempt can no longer write an account and a read shows none.
+  const report = (why: string, status: number) =>
+    reportOrphan(deps, context, status, {
       organizationId: membership.organizationId,
       userId: userUuid,
       attemptId: attempt.id,
       why,
-      abandon: join.kind === 'create',
     })
   let created: boolean
   try {
@@ -521,28 +511,30 @@ export async function verifyEmail(
       passwordHash: state.passwordHash,
     })
     if (!created) {
+      // A unique violation: this user id, or this address, is already taken.
       const mine = await deps.users.findById(tenant.environmentId, userId)
       if (mine?.emailNormalized !== attempt.identifier) {
-        await orphan('the address went to another sign-up', 409)
+        const holder = await deps.users.findByEmail(tenant.environmentId, attempt.identifier)
+        if (holder !== null && holder.id !== userId && mine === null) {
+          // Proven by reading who owns the address: a different user, and this user id has no
+          // account, so this attempt's account can never be written. The only abandon in a request.
+          await settleOrphan(deps, context, 409, {
+            organizationId: membership.organizationId,
+            userId: userUuid,
+            attemptId: attempt.id,
+            why: 'the address went to another sign-up',
+            abandon: join.kind === 'create',
+          })
+        } else {
+          await report('the account could not be written and no other holder was proven', 409)
+        }
         throw fail(AUTH_ERRORS['flow.invalid_step'])
       }
+      // Otherwise the account is this attempt's own (an earlier request of it committed): done.
     }
   } catch (error) {
     if (!isAppError(error)) {
-      // The write may have committed before the error (a dropped connection), in which case the
-      // account exists and its Organization must stand: abandon only once a read shows no account.
-      const written = await accountExists(deps, tenant, userId)
-      if (written === false) {
-        await orphan('the account could not be written', 500)
-      } else if (written === undefined) {
-        // Nothing can be said about the account, so nothing is abandoned: report it for a person.
-        await reportOrphan(deps, context, 500, {
-          organizationId: membership.organizationId,
-          userId: userUuid,
-          attemptId: attempt.id,
-          why: 'the account could not be written, and could not be read back; abandon not asked',
-        })
-      }
+      await report('the account could not be written', 500)
     }
     throw error
   }

@@ -925,23 +925,47 @@ describe('failures around the commit of a sign-up', () => {
 })
 
 describe('an Organization that core made and nobody owns', () => {
+  type Setup = Awaited<ReturnType<typeof setup>>
   /** Makes the account write fail, as a database that errors for a reason other than a taken address. */
-  function breakInsert(deps: Awaited<ReturnType<typeof setup>>['deps']) {
+  function breakInsert(deps: Setup['deps']) {
     deps.users.create = async () => {
       throw new Error('connection reset')
     }
   }
-  const reconcileReports = (deps: Awaited<ReturnType<typeof setup>>['deps']) =>
+  /** Another sign-up for the same address commits while core is answering this one. */
+  function loseAddress(deps: Setup['deps'], email: string) {
+    const tenant = deps.tenant.current
+    const createOrganization = deps.membership.createOrganization.bind(deps.membership)
+    deps.membership.createOrganization = async (input) => {
+      const created = await createOrganization(input)
+      await deps.users.create({
+        id: crypto.randomUUID(),
+        projectId: tenant?.projectId ?? '',
+        environmentId: tenant?.environmentId ?? '',
+        email,
+        emailNormalized: email,
+        emailVerifiedAt: deps.clock.now(),
+        firstName: null,
+        lastName: null,
+        createdAt: deps.clock.now(),
+        identityId: crypto.randomUUID(),
+        credentialId: crypto.randomUUID(),
+        passwordHash: '$argon2id$rival',
+      })
+      return created
+    }
+  }
+  const reconcileReports = (deps: Setup['deps']) =>
     deps.reported.filter(
       (entry) => entry.error instanceof Error && entry.error.message.includes('reconcile')
     )
-  const ownerlessWarnings = (deps: Awaited<ReturnType<typeof setup>>['deps']) =>
+  const warnings = (deps: Setup['deps']) =>
     deps.logLines
       .map((line) => JSON.parse(line) as Record<string, unknown>)
       .filter((entry) => entry.level === 40)
       .map((entry) => String(entry.msg))
 
-  test('an insert that fails after core answered abandons the Organization once, with the case ids and key, and the answer is unchanged', async () => {
+  test('an insert that throws is reported by ids and never abandoned in the request', async () => {
     const { deps, signUp, verify, nextEmail } = await setup()
     const email = nextEmail()
     const started = await signUp(email)
@@ -952,59 +976,126 @@ describe('an Organization that core made and nobody owns', () => {
 
     expect(failed.status).toBe(500)
     expect(failed.body).toMatchObject({ error: { code: 'server.internal' } })
-    const org = deps.membership.organizations[0]
-    if (!org) {
-      throw new Error('no Organization was made')
-    }
-    expect(deps.membership.calls.abandon).toBe(1)
-    expect(deps.membership.abandons[0]).toEqual({
-      organizationId: org.organizationId,
-      userId: org.owner,
-      idempotencyKey: `abandon:${text(started.body, 'id')}`,
-    })
-    expect(reconcileReports(deps)).toHaveLength(0)
-    expect(ownerlessWarnings(deps)).toContain('an Organization with no owner was abandoned')
+    expect(deps.membership.calls.abandon).toBe(0)
+    const [report] = reconcileReports(deps)
+    const message = report?.error instanceof Error ? report.error.message : ''
+    expect(reconcileReports(deps)).toHaveLength(1)
+    expect(message).toContain(deps.membership.organizations[0]?.organizationId ?? 'missing')
+    expect(message).toContain(text(started.body, 'id'))
+    expect(message).not.toContain(email)
     expect(deps.logLines.join('\n')).not.toContain(email)
   })
 
-  test('retrying one attempt whose insert keeps failing abandons each Organization it made, under the one key', async () => {
+  test('a double submit where one insert throws and the other commits ends with a live Organization and no abandon', async () => {
     const { deps, signUp, verify, nextEmail } = await setup()
     const email = nextEmail()
     const started = await signUp(email)
     const code = emailedCode(deps, email)
-    breakInsert(deps)
-
-    for (let n = 0; n < 4; n++) {
-      expect((await verify(started, code)).status).toBe(500)
+    // Request B is held between its call to core and its insert, until request A has finished.
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let coreCalls = 0
+    const createOrganization = deps.membership.createOrganization.bind(deps.membership)
+    deps.membership.createOrganization = async (input) => {
+      coreCalls += 1
+      const mine = coreCalls
+      const created = await createOrganization(input)
+      if (mine === 2) {
+        await gate
+      }
+      return created
+    }
+    // The first insert to be attempted (A's) throws; the held one (B's) is the second.
+    let inserts = 0
+    const create = deps.users.create.bind(deps.users)
+    deps.users.create = async (input) => {
+      inserts += 1
+      if (inserts === 1) {
+        throw new Error('connection reset')
+      }
+      return create(input)
     }
 
-    // Core frees the user id on abandon, so each retry makes a fresh Organization: 4 made, 4 gone.
-    expect(deps.membership.organizations).toHaveLength(4)
-    expect(deps.membership.abandons).toHaveLength(4)
-    expect(new Set(deps.membership.abandons.map((a) => a.organizationId)).size).toBe(4)
-    expect(new Set(deps.membership.abandons.map((a) => a.idempotencyKey))).toEqual(
-      new Set([`abandon:${text(started.body, 'id')}`])
+    const first = verify(started, code)
+    const second = verify(started, code)
+    while (coreCalls < 2) {
+      await Bun.sleep(1)
+    }
+    const a = await first
+    release()
+    const b = await second
+
+    expect(a.status).toBe(500)
+    expect(b.status).toBe(200)
+    expect(deps.membership.calls.abandon).toBe(0)
+    const user = await deps.users.findByEmail(deps.tenant.current?.environmentId ?? '', email)
+    expect(user).not.toBeNull()
+    expect(await deps.membership.forUser(formatId('usr', user?.id ?? '') as UserId)).toMatchObject({
+      role: 'owner',
+      organizationStatus: 'active',
+    })
+  })
+
+  test("the safe branch never abandons when the existing account is this attempt's own user", async () => {
+    const { deps, signUp, verify, nextEmail } = await setup()
+    const email = nextEmail()
+    const started = await signUp(email)
+    const code = emailedCode(deps, email)
+    const tenant = deps.tenant.current
+    const attempt = await deps.flowAttempts.findById(
+      tenant?.environmentId ?? '',
+      text(started.body, 'id')
     )
+    // A request of this same attempt already committed the account (same user id, same address).
+    await deps.users.create({
+      id: String(attempt?.state.userId),
+      projectId: tenant?.projectId ?? '',
+      environmentId: tenant?.environmentId ?? '',
+      email,
+      emailNormalized: email,
+      emailVerifiedAt: deps.clock.now(),
+      firstName: null,
+      lastName: null,
+      createdAt: deps.clock.now(),
+      identityId: crypto.randomUUID(),
+      credentialId: crypto.randomUUID(),
+      passwordHash: '$argon2id$mine',
+    })
+
+    const done = await verify(started, code)
+
+    expect(done.status).toBe(200)
+    expect(deps.membership.calls.abandon).toBe(0)
     expect(reconcileReports(deps)).toHaveLength(0)
   })
 
-  test('another attempt is abandoned under its own key', async () => {
+  test('an address that belongs to a different user is abandoned once, with the case ids and key', async () => {
     const { deps, signUp, verify, nextEmail } = await setup()
     const email = nextEmail()
-    const first = await signUp(email)
-    const firstCode = emailedCode(deps, email)
-    deps.clock.advance('2m')
-    const second = await signUp(email)
-    const secondCode = emailedCode(deps, email)
-    breakInsert(deps)
+    const started = await signUp(email)
+    const code = emailedCode(deps, email)
+    loseAddress(deps, email)
 
-    await verify(first, firstCode)
-    await verify(second, secondCode)
+    const lost = await verify(started, code)
 
-    expect(deps.membership.abandons.map((a) => a.idempotencyKey)).toEqual([
-      `abandon:${text(first.body, 'id')}`,
-      `abandon:${text(second.body, 'id')}`,
+    expect(lost.status).toBe(409)
+    expect(lost.body).toMatchObject({ error: { code: 'flow.invalid_step' } })
+    const org = deps.membership.organizations[0]
+    if (!org) {
+      throw new Error('no Organization was made')
+    }
+    expect(deps.membership.abandons).toEqual([
+      {
+        organizationId: org.organizationId,
+        userId: org.owner,
+        idempotencyKey: `abandon:${text(started.body, 'id')}`,
+      },
     ])
+    expect(reconcileReports(deps)).toHaveLength(0)
+    expect(warnings(deps)).toContain('an Organization with no owner was abandoned')
+    expect(deps.logLines.join('\n')).not.toContain(email)
   })
 
   describe('whatever core answers to the abandon, the sign-up answer is the same', () => {
@@ -1013,16 +1104,14 @@ describe('an Organization that core made and nobody owns', () => {
       const email = nextEmail()
       const started = await signUp(email, { organizationName: 'Northline', firstName: 'Zebulon' })
       const code = emailedCode(deps, email)
-      breakInsert(deps)
+      loseAddress(deps, email)
       deps.membership.refuseAbandons(true)
 
-      const failed = await verify(started, code)
-      await verify(started, code)
+      const lost = await verify(started, code)
 
-      expect(failed.status).toBe(500)
-      // Two verifies, so two orphans, each tried exactly once; the tracker hears of the attempt once.
-      expect(deps.membership.calls.abandon).toBe(2)
-      expect(ownerlessWarnings(deps)).toContain('core refused to abandon an Organization')
+      expect(lost.status).toBe(409)
+      expect(deps.membership.calls.abandon).toBe(1)
+      expect(warnings(deps)).toContain('core refused to abandon an Organization')
       const reports = reconcileReports(deps)
       expect(reports).toHaveLength(1)
       const message = reports[0]?.error instanceof Error ? reports[0].error.message : ''
@@ -1037,30 +1126,31 @@ describe('an Organization that core made and nobody owns', () => {
       const email = nextEmail()
       const started = await signUp(email)
       const code = emailedCode(deps, email)
-      breakInsert(deps)
+      loseAddress(deps, email)
       deps.membership.failNextAbandons(1)
 
-      const failed = await verify(started, code)
+      const lost = await verify(started, code)
 
-      expect(failed.status).toBe(500)
+      expect(lost.status).toBe(409)
       expect(deps.membership.calls.abandon).toBe(2)
       expect(new Set(deps.membership.abandons.map((a) => a.idempotencyKey)).size).toBe(1)
       expect(reconcileReports(deps)).toHaveLength(0)
     })
 
-    test('a transient failure that outlasts the tries is reported, by ids, once per attempt', async () => {
+    test('a transient failure that outlasts the tries is reported by ids', async () => {
       const { deps, signUp, verify, nextEmail } = await setup()
       const email = nextEmail()
       const started = await signUp(email)
       const code = emailedCode(deps, email)
-      breakInsert(deps)
+      loseAddress(deps, email)
       deps.membership.failNextAbandons(100)
 
-      const failed = await verify(started, code)
+      const lost = await verify(started, code)
 
-      expect(failed.status).toBe(500)
+      expect(lost.status).toBe(409)
+      expect(lost.body).toMatchObject({ error: { code: 'flow.invalid_step' } })
       expect(deps.membership.calls.abandon).toBe(3)
-      expect(ownerlessWarnings(deps)).toContain('could not abandon an Organization')
+      expect(warnings(deps)).toContain('could not abandon an Organization')
       const reports = reconcileReports(deps)
       expect(reports).toHaveLength(1)
       const message = reports[0]?.error instanceof Error ? reports[0].error.message : ''
@@ -1068,76 +1158,6 @@ describe('an Organization that core made and nobody owns', () => {
       expect(message).toContain(text(started.body, 'id'))
       expect(message).not.toContain(email)
     })
-
-    test('the address lost to another sign-up still answers 409 when the abandon fails', async () => {
-      const { deps, signUp, verify, nextEmail } = await setup()
-      const email = nextEmail()
-      const started = await signUp(email)
-      const code = emailedCode(deps, email)
-      const tenant = deps.tenant.current
-      deps.membership.failNextAbandons(100)
-      const createOrganization = deps.membership.createOrganization.bind(deps.membership)
-      deps.membership.createOrganization = async (input) => {
-        const created = await createOrganization(input)
-        await deps.users.create({
-          id: crypto.randomUUID(),
-          projectId: tenant?.projectId ?? '',
-          environmentId: tenant?.environmentId ?? '',
-          email,
-          emailNormalized: email,
-          emailVerifiedAt: deps.clock.now(),
-          firstName: null,
-          lastName: null,
-          createdAt: deps.clock.now(),
-          identityId: crypto.randomUUID(),
-          credentialId: crypto.randomUUID(),
-          passwordHash: '$argon2id$rival',
-        })
-        return created
-      }
-
-      const lost = await verify(started, code)
-
-      expect(lost.status).toBe(409)
-      expect(lost.body).toMatchObject({ error: { code: 'flow.invalid_step' } })
-      expect(deps.membership.calls.abandon).toBe(3)
-      expect(reconcileReports(deps)).toHaveLength(1)
-    })
-  })
-
-  test('an insert that committed before it threw is not abandoned: the account exists', async () => {
-    const { deps, signUp, verify, nextEmail } = await setup()
-    const email = nextEmail()
-    const started = await signUp(email)
-    const code = emailedCode(deps, email)
-    const create = deps.users.create.bind(deps.users)
-    deps.users.create = async (input) => {
-      await create(input)
-      throw new Error('connection reset after commit')
-    }
-
-    const failed = await verify(started, code)
-
-    expect(failed.status).toBe(500)
-    expect(deps.membership.calls.abandon).toBe(0)
-    expect(reconcileReports(deps)).toHaveLength(0)
-  })
-
-  test('an insert that fails when the account cannot be read back either is reported, not abandoned', async () => {
-    const { deps, signUp, verify, nextEmail } = await setup()
-    const email = nextEmail()
-    const started = await signUp(email)
-    const code = emailedCode(deps, email)
-    breakInsert(deps)
-    deps.users.findById = async () => {
-      throw new Error('connection reset')
-    }
-
-    const failed = await verify(started, code)
-
-    expect(failed.status).toBe(500)
-    expect(deps.membership.calls.abandon).toBe(0)
-    expect(reconcileReports(deps)).toHaveLength(1)
   })
 
   test('a burned invitation is reported but never abandoned: the Organization has other members', async () => {
