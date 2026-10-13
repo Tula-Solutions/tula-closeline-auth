@@ -24,7 +24,12 @@ async function setup() {
   const core = startFakeCore()
   started.push(core)
   const adapter = (token = core.secret) =>
-    createHttpMembership({ baseUrl: core.url, token, retryDelayMs: () => 0 })
+    createHttpMembership({
+      baseUrl: core.url,
+      token,
+      environment: 'local',
+      retryDelayMs: () => 0,
+    })
   const base = await createReadyDeps()
   // The same container with the real adapter in place of the memory one; the logs, the reports
   // and the clock are the ones `base` records.

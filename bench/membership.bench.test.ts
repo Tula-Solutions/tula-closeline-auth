@@ -10,8 +10,9 @@ import { BATCH_REQUESTS, BATCHES, measure, summary } from './measure'
 // bounded read of the answer and the concurrency slot. Measured against an in-process fake of
 // core over the loopback interface, so it times this service's side of the call plus the local
 // socket, not a real network or a real core. Typical best batch on a developer laptop:
-// 53 ms for 500 lookups (about 0.11 ms each); the median batch was 55 ms in the same runs (50 to 55 ms
-// best over three runs).
+// 62 ms for 500 lookups (about 0.12 ms each; 41 ms with `fetch` before the kit client, which opens
+// a new connection per call); the median batch was 65 ms in the same runs (62 to 64 ms best over
+// three runs).
 // The budget is about five times the typical best batch. A regression such as a per-call
 // connection setup, a retry on every call or an unbounded read fails it.
 const BUDGET_MS = 270
@@ -22,7 +23,11 @@ afterAll(async () => {
 })
 
 test(`membership lookup: the best of ${BATCHES} batches of ${BATCH_REQUESTS} lookups is within ${BUDGET_MS} ms`, async () => {
-  const adapter = createHttpMembership({ baseUrl: core.url, token: core.secret })
+  const adapter = createHttpMembership({
+    baseUrl: core.url,
+    token: core.secret,
+    environment: 'local',
+  })
   const userId = formatId('usr', crypto.randomUUID())
   await adapter.createOrganization({
     email: 'maya@northline.app',

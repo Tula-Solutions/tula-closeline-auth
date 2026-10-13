@@ -97,7 +97,10 @@ verification try the code cost, so outages never use up a correct code). An outa
 warn, one line per failed request, and not reported; a rejected secret is reported once a minute
 per cause class (`src/http/errors.ts`). Core saying a new user already belongs to an Organization is a fault: 500,
 no `Retry-After`, reported once per attempt, the try stays spent. Calls to core are capped
-(`CORE_CONCURRENCY`, `CORE_QUEUE`); past the cap a call is 503 at once.
+(`CORE_CONCURRENCY`, `CORE_QUEUE`); past the cap a call is 503 at once. They go through the kit's
+`createInternalClient` (ADR 0013), never `fetch`, so no proxy variable can reroute them, and the
+service refuses to boot with `NODE_TLS_REJECT_UNAUTHORIZED=0` outside `local`; the adapter owns
+retrying (the client is built with one attempt).
 
 Sign-up safety: the user id and the idempotency key `signup:<attempt id>` are fixed when the
 attempt starts, and `verify-email` holds no database transaction across the call to core. Order:
@@ -193,7 +196,7 @@ membership read to core (the token hook: one HTTP call, retried at most once, 4.
 asked once per request even if the rotation is retried; a replay inside the grace window asks
 too, only a token spent beyond grace and an expired token cost no call),
 one signature, one rotation. The membership lookup through the HTTP adapter is a hot path too
-(`bench/membership.bench.test.ts`: best batch about 53 ms per 500 lookups, budget 270 ms). The
+(`bench/membership.bench.test.ts`: best batch about 62 ms per 500 lookups, budget 270 ms; one new connection per call since the kit client keeps none alive). The
 JWKS and bearer routes read at most 20 keys, bounded in SQL by retirement time and a limit.
 Budgets are in `bench/`.
 
