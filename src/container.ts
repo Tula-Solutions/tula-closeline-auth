@@ -1,4 +1,6 @@
+import { sql } from 'drizzle-orm'
 import type { RequestId } from 'tula-closeline-contract'
+import { createDb } from 'tula-closeline-db'
 import {
   type Clock,
   createLogger,
@@ -6,9 +8,13 @@ import {
   type Logger,
   systemClock,
 } from 'tula-closeline-kit'
+import { createPostgresFixedProject } from '~/adapters/postgres/fixed-project'
+import { uuidV7Ids } from '~/adapters/system/ids'
 import { describeError } from '~/describe-error'
-import { type Env, loadEnv } from '~/env'
+import { databaseUrl, type Env, loadEnv } from '~/env'
 import { SERVICE } from '~/info'
+import type { FixedProject, Tenant } from '~/ports/fixed-project'
+import type { IdGenerator } from '~/ports/id-generator'
 
 /** One dependency probe for `/readyz`: resolve when healthy, reject or stall when not. */
 export type ReadinessCheck = {
@@ -45,6 +51,14 @@ export type Container = {
    * `drainingSince` is when the first signal arrived (epoch ms from `clock`), for shutdown only.
    */
   lifecycle: { draining: boolean; drainingSince?: number }
+  /** Mints row ids. */
+  ids: IdGenerator
+  /** The Region's one workspace and project; only `modules/bootstrap` calls it. */
+  fixedProject: FixedProject
+  /** The tenant this deployment serves, set once bootstrapping has run. */
+  tenant: { current?: Tenant }
+  /** Releases what the container holds (database connections); call once on shutdown. */
+  close: () => Promise<void>
 }
 
 /**
@@ -76,12 +90,37 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     ...(options.logDestination ? { destination: options.logDestination } : {}),
   })
 
+  // The pool connects on first use, so building a container needs no database.
+  const database = createDb(databaseUrl(env), {
+    onError: (error) => logger.error('database connection error', { error: describeError(error) }),
+  })
+  const tenant: Container['tenant'] = {}
+
   return {
     env,
     logger,
     clock: systemClock,
-    readinessChecks: [],
+    readinessChecks: [
+      {
+        name: 'database',
+        run: async () => {
+          await database.db.execute(sql`select 1`)
+        },
+      },
+      {
+        name: 'bootstrap',
+        run: async () => {
+          if (!tenant.current) {
+            throw new Error('the fixed project is not bootstrapped')
+          }
+        },
+      },
+    ],
     lifecycle: { draining: false },
+    ids: uuidV7Ids,
+    fixedProject: createPostgresFixedProject(database.db),
+    tenant,
+    close: database.close,
     reportError: (error, context) => {
       logger.error('unhandled error', { ...context, error: describeError(error) })
     },

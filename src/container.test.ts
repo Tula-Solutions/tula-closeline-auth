@@ -4,7 +4,7 @@ import { loadEnv } from './env'
 
 test('the default reportError logs the failure with its request context at error level', () => {
   const lines: string[] = []
-  const container = createContainer(loadEnv({ ENVIRONMENT: 'local' }), {
+  const container = createContainer(loadEnv({ ENVIRONMENT: 'local', REGION: 'us' }), {
     logDestination: { write: (l) => lines.push(l) },
   })
   const requestId = `req_${'a'.repeat(32)}` as never
@@ -30,7 +30,7 @@ test('the default reportError logs the failure with its request context at error
 
 test('the default reportError logs the stack frames and the whole cause chain', () => {
   const lines: string[] = []
-  const container = createContainer(loadEnv({ ENVIRONMENT: 'local' }), {
+  const container = createContainer(loadEnv({ ENVIRONMENT: 'local', REGION: 'us' }), {
     logDestination: { write: (l) => lines.push(l) },
   })
   const requestId = `req_${'c'.repeat(32)}` as never
@@ -45,7 +45,7 @@ test('the default reportError logs the stack frames and the whole cause chain', 
 
 test('the default reportError bounds a long message', () => {
   const lines: string[] = []
-  const container = createContainer(loadEnv({ ENVIRONMENT: 'local' }), {
+  const container = createContainer(loadEnv({ ENVIRONMENT: 'local', REGION: 'us' }), {
     logDestination: { write: (l) => lines.push(l) },
   })
   const requestId = `req_${'d'.repeat(32)}` as never
@@ -64,7 +64,9 @@ test('reportSafely swallows a reporter that throws or rejects', async () => {
   const unhandled: unknown[] = []
   const listener = (reason: unknown) => unhandled.push(reason)
   process.on('unhandledRejection', listener)
-  const container = createContainer(loadEnv({ ENVIRONMENT: 'local', LOG_LEVEL: 'silent' }))
+  const container = createContainer(
+    loadEnv({ ENVIRONMENT: 'local', REGION: 'us', LOG_LEVEL: 'silent' })
+  )
   const context = {
     requestId: `req_${'e'.repeat(32)}` as never,
     method: 'GET',
@@ -91,7 +93,7 @@ test('reportSafely swallows a reporter that throws or rejects', async () => {
 
 test('the default reportError records a thrown non-Error without its value', () => {
   const lines: string[] = []
-  const container = createContainer(loadEnv({ ENVIRONMENT: 'local' }), {
+  const container = createContainer(loadEnv({ ENVIRONMENT: 'local', REGION: 'us' }), {
     logDestination: { write: (l) => lines.push(l) },
   })
   const requestId = `req_${'b'.repeat(32)}` as never
@@ -103,15 +105,20 @@ test('the default reportError records a thrown non-Error without its value', () 
 
 test('LOG_LEVEL silences the logger', () => {
   const lines: string[] = []
-  const container = createContainer(loadEnv({ ENVIRONMENT: 'local', LOG_LEVEL: 'silent' }), {
-    logDestination: { write: (l) => lines.push(l) },
-  })
+  const container = createContainer(
+    loadEnv({ ENVIRONMENT: 'local', REGION: 'us', LOG_LEVEL: 'silent' }),
+    {
+      logDestination: { write: (l) => lines.push(l) },
+    }
+  )
 
   container.logger.error('nothing to see')
 
   expect(lines).toHaveLength(0)
 })
 
-test('a container built from the environment has no readiness checks yet', () => {
-  expect(createContainer(loadEnv({ ENVIRONMENT: 'local' })).readinessChecks).toEqual([])
+test('a container built from the environment checks the database and the bootstrap', () => {
+  const container = createContainer(loadEnv({ ENVIRONMENT: 'local', REGION: 'us' }))
+
+  expect(container.readinessChecks.map((check) => check.name)).toEqual(['database', 'bootstrap'])
 })

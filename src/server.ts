@@ -1,9 +1,19 @@
 import { createApp } from '~/app'
 import { createContainer } from '~/container'
+import { describeError } from '~/describe-error'
 import { serveOptions } from '~/http/serve'
+import * as Bootstrap from '~/modules/bootstrap/service'
 import { shutdown } from '~/shutdown'
 
 const container = createContainer()
+try {
+  await Bootstrap.start(container)
+} catch (error) {
+  // Refuse to serve rather than run against a Region that has no, or more than one, project.
+  container.logger.error('bootstrap failed', { error: describeError(error) })
+  await container.close().catch(() => {})
+  process.exit(1)
+}
 const app = createApp(container)
 const server = Bun.serve(serveOptions(container, app))
 
@@ -18,7 +28,12 @@ function stop(signal: string): void {
     logger: container.logger,
     graceMs: container.env.SHUTDOWN_GRACE_MS,
     timeoutMs: container.env.SHUTDOWN_TIMEOUT_MS,
-    exit: (code) => process.exit(code),
+    exit: (code) => {
+      container
+        .close()
+        .catch(() => {})
+        .finally(() => process.exit(code))
+    },
   })
 }
 

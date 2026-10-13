@@ -7,7 +7,7 @@ import { buildOpenApiDocument } from '~/openapi'
 const FILE = new URL('../openapi.json', import.meta.url)
 
 const document = buildOpenApiDocument(
-  createApp(createContainer(loadEnv({ ENVIRONMENT: 'local', LOG_LEVEL: 'silent' })))
+  createApp(createContainer(loadEnv({ ENVIRONMENT: 'local', REGION: 'us', LOG_LEVEL: 'silent' })))
 )
 const next = `${JSON.stringify(document, null, 2)}\n`
 
