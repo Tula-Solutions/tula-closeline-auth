@@ -7,12 +7,16 @@ import { type MembershipClaims, MembershipUnavailable } from '~/ports/membership
  * It never invents a membership.
  */
 export function createPlaceholderMembership(): MembershipClaims {
-  const unavailable = async (): Promise<never> => {
+  const unavailable = async (input?: { signal?: AbortSignal }): Promise<never> => {
+    input?.signal?.throwIfAborted()
     throw new MembershipUnavailable('the core service is not connected yet (placeholder adapter)')
   }
   return {
     createOrganization: unavailable,
     acceptInvitation: unavailable,
-    forUser: async () => null,
+    forUser: async (_userId, signal) => {
+      signal?.throwIfAborted()
+      return null
+    },
   }
 }

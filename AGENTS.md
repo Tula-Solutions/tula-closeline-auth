@@ -54,7 +54,7 @@ The shape in `.claude/COMMON.md` is built; modules are under `src/modules/<name>
 - Modules: `bootstrap` (the Region's one workspace, project and two environments, created under an
   advisory lock), `jwks` (keys, rotation, `/.well-known/jwks.json`), `token` (signs `at+jwt`),
   `flow` (sign-up and sign-in), `verification` (emailed codes), `password`, `membership` (the
-  port to the core service, with a 5 s bound), `session` (create, refresh, sign-out, list,
+  port to the core service, with a 5 s bound and an abort signal), `session` (create, refresh, sign-out, list,
   authenticate), `user` (`/v1/client/me`), `retention` (the purge, below), `conformance` (the
   scenario runner).
 - Readiness checks `database` and `bootstrap`; shutdown as in the template (`src/shutdown.ts`).
@@ -78,11 +78,25 @@ return the Organization and role of an existing user. The runtime adapter is a p
 ticket 1.9 (it never invents a membership), so nobody can sign up on a real deployment yet.
 
 Sign-up safety: the user id and the idempotency key `signup:<attempt id>` are fixed when the
-attempt starts. The user rows are written inside a transaction whose last step is the membership
-call; if core refuses, is down or exceeds 5 s the transaction rolls back (no account) and the
-answer is `signup.*` (422) or `membership.unavailable` (503). The emailed code is spent only
-after that, so a retry works. If the process dies after core made the Organization but before
-the commit, the retry reuses the same key and core returns the same Organization.
+attempt starts. `verify-email` holds no database transaction across the call to core (a slow core
+would starve the pool and take sign-in, refresh and `/readyz` down with it). Order: check the
+address is free (`findByEmail`), ask core with the key and the user id, then write the account in
+one short transaction. If core refuses, is down or exceeds the 5 s bound (the call's `AbortSignal`
+aborts at the bound, so an adapter cancels the request), nothing was written and the answer is
+`signup.*` (422) or `membership.unavailable` (503); the emailed code is spent only after the
+account exists, so a retry works, and a retry (even after a crash) gets the same Organization
+from core. An insert that finds the same user id already there is such a retry and counts as done.
+After the commit, spending the code and closing the attempt are best-effort (logged with the
+attempt id, never fatal); a failure creating the first session is an error but the account
+exists, and signing in recovers it.
+
+**Orphaned Organizations need reconciliation (owned by step 1.9, the core adapter).** Core can
+create an Organization for a sign-up whose account is never written: the insert loses the address
+to another sign-up (answered 409 `flow.invalid_step`, and reported through `reportError` with the
+Organization, user and attempt ids and no address), the process dies between core and the insert,
+or the attempt expires before a retry (a new attempt has a new key, so a second Organization). A
+burned invitation is the same. Auth does not clean these up; core or a reconciliation job must
+find Organizations whose owner never signed in.
 
 Sign-in and refresh read the Organization (`forUser`) before any session or token exists. An
 account with none gets `auth.no_organization` (403), is reported through `reportError`, and gets

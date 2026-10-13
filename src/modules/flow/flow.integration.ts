@@ -126,3 +126,66 @@ function emailedCodeFor(_started: unknown): string {
   }
   return code
 }
+
+describe('a slow core service, over a real Postgres', () => {
+  test('twelve sign-ups waiting on core leave sign-in, refresh and readiness answering', async () => {
+    const known = await signUp('known@northline.app')
+    const done = await known.verify(known.code())
+    const refreshToken = text(done.body, 'session.refreshToken')
+    deps.readinessChecks = [
+      {
+        name: 'database',
+        run: async () => {
+          await deps.db.execute(sql`select 1`)
+        },
+      },
+    ]
+    // More sign-ups than the pool has connections, each waiting on a core that does not answer.
+    const waiting = await Promise.all(
+      Array.from({ length: deps.env.DB_POOL_MAX + 2 }, async (_, n) => {
+        const pending = await signUp(`slow${n}@northline.app`)
+        return { verify: pending.verify, code: pending.code() }
+      })
+    )
+    const release = deps.membership.hold()
+    const callsBefore = deps.membership.calls.create
+    let finished = 0
+    const verifications = waiting.map(async ({ verify, code }) => {
+      const reply = await verify(code)
+      finished += 1
+      return reply
+    })
+    for (let tries = 0; deps.membership.calls.create - callsBefore < waiting.length; tries++) {
+      if (tries > 1_000) {
+        throw new Error('the sign-ups never reached core')
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+
+    const app = createApp(deps)
+    const attempt = await call(app, 'POST', '/v1/client/sign-ins', {
+      body: { identifier: 'known@northline.app' },
+    })
+    const signedIn = await call(
+      app,
+      'POST',
+      `/v1/client/sign-ins/${text(attempt.body, 'id')}/password`,
+      { attempt: text(attempt.body, 'attemptSecret'), body: { password: PASSWORD } }
+    )
+    const refreshed = await call(app, 'POST', '/v1/client/sessions/refresh', {
+      body: { refreshToken },
+    })
+    const ready = await app.request('/readyz')
+    const stillWaiting = finished
+
+    release()
+    const replies = await Promise.all(verifications)
+
+    expect(signedIn.status).toBe(200)
+    expect(refreshed.status).toBe(200)
+    expect(ready.status).toBe(200)
+    // Every answer above came while all the sign-ups were still waiting on core.
+    expect(stillWaiting).toBe(0)
+    expect(replies.map((reply) => reply.status)).toEqual(Array(waiting.length).fill(200))
+  })
+})

@@ -18,8 +18,8 @@ export async function createPostgresDeps(): Promise<
   const owner = ownerPool()
   await resetAuthData(owner)
   await owner.end()
-  const handle = createDb(authUrl())
   const memory = createTestDeps()
+  const handle = createDb(authUrl(), { max: memory.env.DB_POOL_MAX })
   const deps = Object.assign(memory, {
     fixedProject: createPostgresFixedProject(handle.db),
     signingKeys: createPostgresSigningKeyStore(handle.db),

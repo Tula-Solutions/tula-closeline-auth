@@ -1,6 +1,7 @@
 import { ERRORS, formatId, type UserId } from 'tula-closeline-contract'
 import { z } from 'zod'
 import type { Container } from '~/container'
+import { describeError } from '~/describe-error'
 import { AUTH_ERRORS, fail, rateLimited } from '~/errors'
 import { randomToken, sha256Hex, timingSafeEqual } from '~/lib/crypto'
 import { durationToMs } from '~/lib/duration'
@@ -14,7 +15,6 @@ import * as Verification from '~/modules/verification/service'
 import type { Tenant } from '~/ports/fixed-project'
 import type { FlowAttemptRecord } from '~/ports/flow-attempt-store'
 import { CREDENTIAL_LOCKOUT, signInLockKey } from '~/ports/lockout'
-import type { Membership as MembershipClaim } from '~/ports/membership'
 import type { SessionClient } from '~/ports/session-store'
 import {
   ATTEMPT_SECRET_PREFIX,
@@ -246,16 +246,41 @@ export async function resendCode(
   return present(attempt, state)
 }
 
+/** Runs bookkeeping that follows a committed account: a failure is logged (ids only), not raised. */
+async function bestEffort(
+  deps: Pick<Container, 'logger'>,
+  what: string,
+  attemptId: string,
+  work: () => Promise<void>
+): Promise<void> {
+  try {
+    await work()
+  } catch (error) {
+    deps.logger.warn(`${what} failed after the account was committed`, {
+      attemptId,
+      error: describeError(error),
+    })
+  }
+}
+
 /**
- * Completes a sign-up with the emailed code: creates the account and its Organization membership
- * as one step, then the first session.
+ * Completes a sign-up with the emailed code: creates the account and its Organization membership,
+ * then the first session.
  *
- * The code is checked first but spent only after the account exists, and the account is written
- * inside a database transaction that the membership call (to the core service) must succeed
- * within: if core refuses, is down or is slow, the transaction rolls back, no account exists, the
- * code is still good and the answer is a contract error. If the process dies after core has made
- * the Organization but before the commit, the retry reuses the same user id and idempotency key,
- * so core returns the same Organization instead of making a second.
+ * No database transaction is held across the call to core (it can take 5 seconds, and a few
+ * of them would starve the pool). The order is: the address is checked free; core is asked for the
+ * Organization with the attempt's idempotency key (`signup:<attempt id>`) and the user id fixed
+ * when the attempt started, so a retry gets the same Organization instead of a second; then the
+ * account is written in one short transaction. An insert that finds this same user id already
+ * there is a retry that crashed after committing, and counts as done. An insert that loses the
+ * address to a different sign-up leaves an Organization with no owner: the answer is the same as
+ * for a taken address and the orphan is reported (ids only) for reconciliation (ticket 1.9).
+ *
+ * The code is checked first but spent only after the account exists, and spending it and closing
+ * the attempt are best-effort: once the account is committed a failure of either (a thrown
+ * error) cannot turn a completed sign-up into an error (the user can always sign in). Only the
+ * answer "already spent" is refused, which is what keeps a code single-use. If core refuses or is down, nothing was
+ * written, the code is still good and the answer is a contract error.
  */
 export async function verifyEmail(
   deps: Container,
@@ -285,45 +310,58 @@ export async function verifyEmail(
         email: attempt.identifier,
       }
 
-  let membership: MembershipClaim | undefined
-  const created = await deps.users.create(
-    {
-      id: userId,
-      projectId: tenant.projectId,
-      environmentId: tenant.environmentId,
-      email: state.email ?? attempt.identifier,
-      emailNormalized: attempt.identifier,
-      emailVerifiedAt: now,
-      firstName: state.firstName ?? null,
-      lastName: state.lastName ?? null,
-      createdAt: now,
-      identityId: deps.ids.next(),
-      credentialId: deps.ids.next(),
-      passwordHash: state.passwordHash,
-    },
-    async () => {
-      membership = await Membership.join(
-        deps,
-        formatId('usr', userId) as UserId,
-        join,
-        `signup:${attempt.id}`
+  // Most taken addresses are caught here, before core is asked for an Organization nobody owns.
+  const holder = await deps.users.findByEmail(tenant.environmentId, attempt.identifier)
+  if (holder && holder.id !== userId) {
+    throw fail(AUTH_ERRORS['flow.invalid_step'])
+  }
+  const userUuid = formatId('usr', userId) as UserId
+  const membership = await Membership.join(deps, userUuid, join, `signup:${attempt.id}`)
+  const created = await deps.users.create({
+    id: userId,
+    projectId: tenant.projectId,
+    environmentId: tenant.environmentId,
+    email: state.email ?? attempt.identifier,
+    emailNormalized: attempt.identifier,
+    emailVerifiedAt: now,
+    firstName: state.firstName ?? null,
+    lastName: state.lastName ?? null,
+    createdAt: now,
+    identityId: deps.ids.next(),
+    credentialId: deps.ids.next(),
+    passwordHash: state.passwordHash,
+  })
+  if (!created) {
+    const mine = await deps.users.findById(tenant.environmentId, userId)
+    if (mine?.emailNormalized !== attempt.identifier) {
+      context.report(
+        new Error(
+          `organization ${membership.organizationId} has no owner: user ${userUuid} lost the ` +
+            `address to another sign-up (attempt ${attempt.id}); reconcile`
+        ),
+        409
       )
+      throw fail(AUTH_ERRORS['flow.invalid_step'])
     }
-  )
-  if (!created || !membership) {
+  }
+  let spent: boolean | undefined
+  await bestEffort(deps, 'spending the code', attempt.id, async () => {
+    spent = await deps.verificationTokens.consume(tenant.environmentId, tokenId, now)
+  })
+  if (spent === false) {
+    // The code is single-use: another request with it got here first and is finishing the
+    // sign-up (same account, so nothing is lost), or the code ran out as this request finished.
     throw fail(AUTH_ERRORS['flow.invalid_step'])
   }
-  await Verification.consume(deps, tenant, tokenId)
-  const moved = await deps.flowAttempts.transition(
-    tenant.environmentId,
-    attempt.id,
-    attempt.status,
-    { status: 'complete', userId, state: { client: state.client }, completedAt: now },
-    now
-  )
-  if (!moved) {
-    throw fail(AUTH_ERRORS['flow.invalid_step'])
-  }
+  await bestEffort(deps, 'closing the attempt', attempt.id, async () => {
+    await deps.flowAttempts.transition(
+      tenant.environmentId,
+      attempt.id,
+      attempt.status,
+      { status: 'complete', userId, state: { client: state.client }, completedAt: now },
+      now
+    )
+  })
   const session = await Sessions.create(deps, tenant, {
     userId,
     client: context.client,

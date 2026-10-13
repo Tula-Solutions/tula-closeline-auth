@@ -34,11 +34,13 @@ export class MemoryUserRepository implements UserRepository {
   }
 
   /** @inheritdoc */
-  async create(user: NewUser, beforeCommit?: () => Promise<void>): Promise<boolean> {
-    if (user.emailNormalized !== null && this.#find(user.environmentId, user.emailNormalized)) {
+  async create(user: NewUser): Promise<boolean> {
+    if (
+      this.#byId.has(user.id) ||
+      (user.emailNormalized !== null && this.#find(user.environmentId, user.emailNormalized))
+    ) {
       return false
     }
-    // Reserve the id while `beforeCommit` runs, as an uncommitted unique row would be.
     const { identityId: _i, credentialId: _c, passwordHash, ...record } = user
     const stored: Stored = {
       user: { ...record, bannedAt: null, lastSignInAt: null },
@@ -46,12 +48,6 @@ export class MemoryUserRepository implements UserRepository {
       passwordChangedAt: user.createdAt,
     }
     this.#byId.set(user.id, stored)
-    try {
-      await beforeCommit?.()
-    } catch (error) {
-      this.#byId.delete(user.id)
-      throw error
-    }
     return true
   }
 

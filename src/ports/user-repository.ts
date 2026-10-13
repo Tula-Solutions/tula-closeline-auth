@@ -45,15 +45,14 @@ export interface UserRepository {
   ): Promise<UserWithPassword | null>
 
   /**
-   * Creates the user, their `email` identity and their password credential in one step.
+   * Creates the user, their `email` identity and their password credential in one short
+   * transaction (no call to another service happens inside it).
    *
-   * `beforeCommit` runs after the rows are written and before they become visible: when it
-   * throws, nothing is kept and the error reaches the caller. This is how an account and its
-   * Organization membership (made in another service) are made safe together.
-   *
-   * @returns `false`, writing nothing and not calling `beforeCommit`, when the address is taken.
+   * @returns `false`, writing nothing, when the address or the user id is already taken. The
+   *   caller tells the two apart with {@link UserRepository.findById}: a retry of the same
+   *   sign-up finds its own id already there.
    */
-  create(user: NewUser, beforeCommit?: () => Promise<void>): Promise<boolean>
+  create(user: NewUser): Promise<boolean>
 
   /** Records a sign-in time. */
   recordSignIn(environmentId: string, userId: string, at: Date): Promise<void>

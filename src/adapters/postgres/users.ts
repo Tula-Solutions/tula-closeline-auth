@@ -79,14 +79,14 @@ export class PostgresUserRepository implements UserRepository {
   }
 
   /** @inheritdoc */
-  async create(user: NewUser, beforeCommit?: () => Promise<void>): Promise<boolean> {
+  async create(user: NewUser): Promise<boolean> {
     const { identityId, credentialId, passwordHash, ...record } = user
     const scope = { projectId: user.projectId, environmentId: user.environmentId }
     const stamps = { createdAt: user.createdAt, updatedAt: user.createdAt }
     try {
       await withEnvironment(this.db, user.environmentId, async (tx) => {
         // The unique key on the address is the arbiter: a concurrent insert of the same address
-        // waits here for the other transaction and then fails, before `beforeCommit` is called.
+        // waits here for the other transaction and then fails.
         await tx.insert(users).values({ ...record, updatedAt: user.createdAt })
         await tx.insert(identities).values({
           id: identityId,
@@ -105,8 +105,6 @@ export class PostgresUserRepository implements UserRepository {
           secretChangedAt: user.createdAt,
           ...stamps,
         })
-        // Throwing here rolls back all three rows.
-        await beforeCommit?.()
       })
       return true
     } catch (error) {

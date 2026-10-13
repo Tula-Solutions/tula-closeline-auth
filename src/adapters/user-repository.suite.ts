@@ -65,18 +65,25 @@ export function userRepositorySuite(name: string, setup: () => Promise<UserSuite
       expect(await ctx.users.findByEmailWithPassword(ctx.a.environmentId, 'no@one.app')).toBeNull()
     })
 
-    test('refuses a duplicate address, writes nothing and never calls beforeCommit', async () => {
+    test('refuses a duplicate address and writes nothing', async () => {
       await ctx.users.create(newUser(ctx.a, 'maya@northline.app'))
-      let called = false
 
       const second = newUser(ctx.a, 'MAYA@northline.app')
-      const created = await ctx.users.create(second, async () => {
-        called = true
-      })
+      const created = await ctx.users.create(second)
 
       expect(created).toBe(false)
-      expect(called).toBe(false)
       expect(await ctx.users.findById(ctx.a.environmentId, second.id)).toBeNull()
+    })
+
+    test('creating the same user twice is refused the second time and leaves the first intact', async () => {
+      const user = newUser(ctx.a, 'maya@northline.app')
+      expect(await ctx.users.create(user)).toBe(true)
+
+      expect(await ctx.users.create(user)).toBe(false)
+
+      expect((await ctx.users.findById(ctx.a.environmentId, user.id))?.emailNormalized).toBe(
+        'maya@northline.app'
+      )
     })
 
     test('the same address can exist in another environment, which cannot see the first', async () => {
@@ -87,32 +94,12 @@ export function userRepositorySuite(name: string, setup: () => Promise<UserSuite
       expect(await ctx.users.findById(ctx.b.environmentId, first.id)).toBeNull()
     })
 
-    test('keeps nothing when beforeCommit fails, and the address stays free', async () => {
-      const user = newUser(ctx.a, 'maya@northline.app')
-
-      await expect(
-        ctx.users.create(user, async () => {
-          throw new Error('membership is down')
-        })
-      ).rejects.toThrow('membership is down')
-
-      expect(await ctx.users.findById(ctx.a.environmentId, user.id)).toBeNull()
-      expect(await ctx.users.findByEmail(ctx.a.environmentId, 'maya@northline.app')).toBeNull()
-      expect(await ctx.users.create(newUser(ctx.a, 'maya@northline.app'))).toBe(true)
-    })
-
-    test('of concurrent creates for one address exactly one wins and runs beforeCommit', async () => {
-      let committed = 0
+    test('of concurrent creates for one address exactly one wins', async () => {
       const results = await Promise.all(
-        Array.from({ length: 6 }, () =>
-          ctx.users.create(newUser(ctx.a, 'race@northline.app'), async () => {
-            committed += 1
-          })
-        )
+        Array.from({ length: 6 }, () => ctx.users.create(newUser(ctx.a, 'race@northline.app')))
       )
 
       expect(results.filter(Boolean)).toHaveLength(1)
-      expect(committed).toBe(1)
     })
 
     test('records the time of a sign-in', async () => {

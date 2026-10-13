@@ -34,18 +34,23 @@ export interface MembershipClaims {
    * Create an Organization for a user who is signing up; the user becomes its Owner.
    *
    * @param input.idempotencyKey - Fixed per sign-up attempt: the same key returns the same result.
+   * @param input.signal - Aborts when the caller has stopped waiting (the 5 second bound), so an
+   *   adapter cancels the request instead of leaving it running; an aborted call is
+   *   MembershipUnavailable.
    * @throws MembershipRefused `organization_name_invalid`; MembershipUnavailable on any failure.
    */
   createOrganization(input: {
     userId: UserId
     name: string
     idempotencyKey: string
+    signal?: AbortSignal
   }): Promise<Membership>
 
   /**
    * Add a user who is signing up to the Organization that invited them.
    *
    * @param input.email - The verified address the invitation must have been sent to.
+   * @param input.signal - As for {@link MembershipClaims.createOrganization}.
    * @throws MembershipRefused `invitation_invalid`; MembershipUnavailable on any failure.
    */
   acceptInvitation(input: {
@@ -53,13 +58,15 @@ export interface MembershipClaims {
     invitationToken: string
     email: string
     idempotencyKey: string
+    signal?: AbortSignal
   }): Promise<Membership>
 
   /**
    * The Organization and role to stamp for an existing user, or `null` if they have none (a
    * fault: a sign-up never leaves an account without one).
    *
+   * @param signal - As for {@link MembershipClaims.createOrganization}.
    * @throws MembershipUnavailable on any failure.
    */
-  forUser(userId: UserId): Promise<Membership | null>
+  forUser(userId: UserId, signal?: AbortSignal): Promise<Membership | null>
 }

@@ -79,3 +79,79 @@ describe('joining an Organization', () => {
     }
   })
 })
+
+describe('a call that is given up on', () => {
+  /** Shrinks the deadline for one test only; the production value is 5 seconds. */
+  async function withShortDeadline<T>(work: () => Promise<T>): Promise<T> {
+    const real = globalThis.setTimeout
+    globalThis.setTimeout = ((fn: () => void) => real(fn, 1)) as unknown as typeof setTimeout
+    try {
+      return await work()
+    } finally {
+      globalThis.setTimeout = real
+    }
+  }
+
+  test('a core that never answers is told to stop: the signal aborts when the bound is hit', async () => {
+    let seen: AbortSignal | undefined
+    const membership = {
+      ...createMemoryMembership(),
+      createOrganization: ({ signal }: { signal?: AbortSignal }) => {
+        seen = signal
+        return new Promise<never>(() => {})
+      },
+    }
+
+    await withShortDeadline(async () => {
+      await expect(
+        Membership.join({ membership }, userId, { kind: 'create', name: 'Northline' }, 'k')
+      ).rejects.toMatchObject({ code: 'membership.unavailable', status: 503 })
+    })
+
+    expect(seen?.aborted).toBe(true)
+  })
+
+  test('the same for an invitation and for a lookup', async () => {
+    const signals: (AbortSignal | undefined)[] = []
+    const hang = (input?: { signal?: AbortSignal } | AbortSignal) => {
+      signals.push(input instanceof AbortSignal ? input : input?.signal)
+      return new Promise<never>(() => {})
+    }
+    const membership = {
+      ...createMemoryMembership(),
+      acceptInvitation: hang,
+      forUser: (_id: UserId, signal?: AbortSignal) => hang(signal),
+    }
+
+    await withShortDeadline(async () => {
+      await expect(
+        Membership.join(
+          { membership },
+          userId,
+          { kind: 'invitation', token: 't', email: 'a@b.app' },
+          'k'
+        )
+      ).rejects.toMatchObject({ code: 'membership.unavailable' })
+      await expect(Membership.of({ membership }, userId)).rejects.toMatchObject({
+        code: 'membership.unavailable',
+      })
+    })
+
+    expect(signals).toHaveLength(2)
+    expect(signals.every((signal) => signal?.aborted === true)).toBe(true)
+  })
+
+  test('a call that finishes in time is not aborted', async () => {
+    const membership = createMemoryMembership()
+    let seen: AbortSignal | undefined
+    const createOrganization = membership.createOrganization.bind(membership)
+    membership.createOrganization = (input) => {
+      seen = input.signal
+      return createOrganization(input)
+    }
+
+    await Membership.join({ membership }, userId, { kind: 'create', name: 'Northline' }, 'k')
+
+    expect(seen?.aborted).toBe(false)
+  })
+})

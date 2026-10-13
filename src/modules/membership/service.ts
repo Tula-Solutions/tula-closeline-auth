@@ -10,6 +10,12 @@ export const MEMBERSHIP_TIMEOUT_MS = 5_000
 /** What a membership call needs from the container. */
 export type MembershipDeps = Pick<Container, 'membership'>
 
+/** Cancels the call that ran out of time (so the adapter can stop it) and names the failure. */
+function timedOut(controller: AbortController): Error {
+  controller.abort()
+  return new Error('membership timed out')
+}
+
 /** The error a membership call that did not answer in time or failed turns into (503). */
 function unavailable(cause: unknown) {
   return fail(AUTH_ERRORS['membership.unavailable'], undefined, cause)
@@ -48,17 +54,20 @@ export async function join(
   request: JoinRequest,
   idempotencyKey: string
 ): Promise<Membership> {
+  const controller = new AbortController()
+  const { signal } = controller
   const call =
     request.kind === 'create'
-      ? deps.membership.createOrganization({ userId, name: request.name, idempotencyKey })
+      ? deps.membership.createOrganization({ userId, name: request.name, idempotencyKey, signal })
       : deps.membership.acceptInvitation({
           userId,
           invitationToken: request.token,
           email: request.email,
           idempotencyKey,
+          signal,
         })
   try {
-    return await withTimeout(call, MEMBERSHIP_TIMEOUT_MS, () => new Error('membership timed out'))
+    return await withTimeout(call, MEMBERSHIP_TIMEOUT_MS, () => timedOut(controller))
   } catch (error) {
     throw translate(error)
   }
@@ -71,11 +80,12 @@ export async function join(
  * @throws AppError `membership.unavailable` when core is down or slow.
  */
 export async function of(deps: MembershipDeps, userId: UserId): Promise<Membership | null> {
+  const controller = new AbortController()
   try {
     return await withTimeout(
-      deps.membership.forUser(userId),
+      deps.membership.forUser(userId, controller.signal),
       MEMBERSHIP_TIMEOUT_MS,
-      () => new Error('membership timed out')
+      () => timedOut(controller)
     )
   } catch (error) {
     throw unavailable(error)

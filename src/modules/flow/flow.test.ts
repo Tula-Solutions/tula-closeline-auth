@@ -630,3 +630,124 @@ describe('what a sign-up costs before it is allowed', () => {
     }
   )
 })
+
+describe('failures around the commit of a sign-up', () => {
+  test.each([
+    ['spending the code', 'verificationTokens', 'consume'],
+    ['closing the attempt', 'flowAttempts', 'transition'],
+  ] as const)(
+    'a failure %s after the account exists is not an error: the user is signed up',
+    async (_what, store, method) => {
+      const { deps, signUp, verify, nextEmail } = await setup()
+      const email = nextEmail()
+      const started = await signUp(email)
+      const code = emailedCode(deps, email)
+      const target = deps[store] as unknown as Record<string, unknown>
+      target[method] = async () => {
+        throw new Error('connection reset')
+      }
+
+      const done = await verify(started, code)
+
+      expect(done.status).toBe(200)
+      expect(done.body).toMatchObject({ step: { status: 'complete' } })
+      expect(
+        await deps.users.findByEmail(deps.tenant.current?.environmentId ?? '', email)
+      ).not.toBeNull()
+      expect(deps.logLines.some((line) => line.includes('after the account was committed'))).toBe(
+        true
+      )
+      expect(deps.logLines.join('\n')).not.toContain(email)
+    }
+  )
+
+  test('session creation failing after the commit leaves an account that can sign in', async () => {
+    const { deps, app, signUp, verify, nextEmail } = await setup()
+    const email = nextEmail()
+    const started = await signUp(email)
+    const code = emailedCode(deps, email)
+    const create = deps.sessions.create.bind(deps.sessions)
+    let failures = 1
+    deps.sessions.create = async (...args) => {
+      if (failures-- > 0) {
+        throw new Error('connection reset')
+      }
+      return create(...args)
+    }
+
+    const failed = await verify(started, code)
+
+    expect(failed.status).toBe(500)
+    expect(
+      await deps.users.findByEmail(deps.tenant.current?.environmentId ?? '', email)
+    ).not.toBeNull()
+    const attempt = await call(app, 'POST', '/v1/client/sign-ins', { body: { identifier: email } })
+    const signedIn = await call(
+      app,
+      'POST',
+      `/v1/client/sign-ins/${text(attempt.body, 'id')}/password`,
+      { attempt: text(attempt.body, 'attemptSecret'), body: { password: PASSWORD } }
+    )
+    expect(signedIn.status).toBe(200)
+    expect(deps.membership.organizations).toHaveLength(1)
+  })
+
+  test('an address taken before core is asked never reaches core', async () => {
+    const { deps, signUp, verify, nextEmail } = await setup()
+    const email = nextEmail()
+    const first = await signUp(email)
+    const firstCode = emailedCode(deps, email)
+    deps.clock.advance('2m')
+    const second = await signUp(email)
+    expect((await verify(first, firstCode)).status).toBe(200)
+    const callsBefore = deps.membership.calls.create
+
+    const lost = await verify(second, emailedCode(deps, email))
+
+    expect(lost.status).toBe(409)
+    expect(lost.body).toMatchObject({ error: { code: 'flow.invalid_step' } })
+    expect(deps.membership.calls.create).toBe(callsBefore)
+    expect(deps.membership.organizations).toHaveLength(1)
+  })
+
+  test('losing the address to another sign-up while core is being asked is a 409 and the orphan is reported without the address', async () => {
+    const { deps, signUp, verify, nextEmail } = await setup()
+    const email = nextEmail()
+    const started = await signUp(email)
+    const code = emailedCode(deps, email)
+    const tenant = deps.tenant.current
+    const createOrganization = deps.membership.createOrganization.bind(deps.membership)
+    deps.membership.createOrganization = async (input) => {
+      const created = await createOrganization(input)
+      // Another sign-up for the same address commits while core is answering this one.
+      await deps.users.create({
+        id: crypto.randomUUID(),
+        projectId: tenant?.projectId ?? '',
+        environmentId: tenant?.environmentId ?? '',
+        email,
+        emailNormalized: email,
+        emailVerifiedAt: deps.clock.now(),
+        firstName: null,
+        lastName: null,
+        createdAt: deps.clock.now(),
+        identityId: crypto.randomUUID(),
+        credentialId: crypto.randomUUID(),
+        passwordHash: '$argon2id$rival',
+      })
+      return created
+    }
+
+    const lost = await verify(started, code)
+
+    expect(lost.status).toBe(409)
+    expect(lost.body).toMatchObject({ error: { code: 'flow.invalid_step' } })
+    expect(deps.reported).toHaveLength(1)
+    const reported = String(
+      deps.reported[0]?.error instanceof Error && deps.reported[0].error.message
+    )
+    expect(reported).toContain(deps.membership.organizations[0]?.organizationId ?? 'missing')
+    expect(reported).toContain('reconcile')
+    expect(reported).not.toContain(email)
+    expect(deps.logLines.join('\n')).not.toContain(email)
+  })
+})
