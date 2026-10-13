@@ -8,6 +8,7 @@ import {
   MembershipBusy,
   MembershipFault,
   MembershipNotAbandonable,
+  MembershipNotRetryable,
   MembershipRefused,
   MembershipRejected,
 } from '~/ports/membership'
@@ -156,8 +157,15 @@ function pauseFor(ms: number, signal: AbortSignal): Promise<void> {
  */
 export async function abandon(
   deps: MembershipDeps & Pick<Container, 'logger'>,
-  input: { organizationId: OrganizationId; userId: UserId; idempotencyKey: string }
+  input: { organizationId: OrganizationId; userId: UserId; idempotencyKey: string },
+  options: {
+    /** The whole call's bound; defaults to {@link MEMBERSHIP_TIMEOUT_MS}. */
+    boundMs?: number
+    /** Waits between tries; injected by tests so none sleeps. */
+    sleep?: (ms: number, signal: AbortSignal) => Promise<void>
+  } = {}
 ): Promise<AbandonOutcome> {
+  const sleep = options.sleep ?? pauseFor
   const controller = new AbortController()
   const { signal } = controller
   const { organizationId, userId } = input
@@ -171,15 +179,22 @@ export async function abandon(
           deps.logger.warn('core refused to abandon an Organization', { organizationId, userId })
           return 'refused'
         }
-        if (attempt >= ABANDON_ATTEMPTS || error instanceof MembershipRejected || signal.aborted) {
+        if (
+          attempt >= ABANDON_ATTEMPTS ||
+          error instanceof MembershipRejected ||
+          error instanceof MembershipNotRetryable ||
+          signal.aborted
+        ) {
           throw error
         }
-        await pauseFor(abandonPauseMs(attempt, error), signal)
+        await sleep(abandonPauseMs(attempt, error), signal)
       }
     }
   }
   try {
-    return await withTimeout(run(), MEMBERSHIP_TIMEOUT_MS, () => timedOut(controller))
+    return await withTimeout(run(), options.boundMs ?? MEMBERSHIP_TIMEOUT_MS, () =>
+      timedOut(controller)
+    )
   } catch {
     deps.logger.warn('could not abandon an Organization', { organizationId, userId })
     return 'unfinished'

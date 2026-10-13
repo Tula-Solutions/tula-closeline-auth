@@ -12,6 +12,7 @@ import {
   MembershipBusy,
   MembershipFault,
   MembershipNotAbandonable,
+  MembershipNotRetryable,
   MembershipRefused,
   MembershipUnavailable,
 } from '~/ports/membership'
@@ -875,5 +876,41 @@ describe('abandoning an Organization', () => {
     ).rejects.toBeInstanceOf(MembershipUnavailable)
 
     expect(core.requests).toHaveLength(0)
+  })
+
+  test.each([
+    [400, json(400, { error: { code: 'request.invalid', message: 'x' } })],
+    [404, json(404, { error: { code: 'request.not_found', message: 'x' } })],
+    [422, json(422, {})],
+    [409, json(409, { error: { code: 'membership.already_member', message: 'x' } })],
+  ])('a %s is not retryable', async (_status, reply) => {
+    const { core, adapter } = connect()
+    core.script(reply)
+
+    const error = await adapter
+      .abandonOrganization({
+        organizationId: organizationId(),
+        userId: user(),
+        idempotencyKey: key(),
+      })
+      .catch((e: unknown) => e)
+
+    expect(error).toBeInstanceOf(MembershipNotRetryable)
+  })
+
+  test.each([500, 502, 504])('a %s stays retryable', async (status) => {
+    const { core, adapter } = connect()
+    core.script({ kind: 'text', status, body: 'down' })
+
+    const error = await adapter
+      .abandonOrganization({
+        organizationId: organizationId(),
+        userId: user(),
+        idempotencyKey: key(),
+      })
+      .catch((e: unknown) => e)
+
+    expect(error).toBeInstanceOf(MembershipUnavailable)
+    expect(error).not.toBeInstanceOf(MembershipNotRetryable)
   })
 })

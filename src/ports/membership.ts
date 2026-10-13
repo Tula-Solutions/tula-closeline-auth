@@ -70,6 +70,17 @@ export class MembershipBusy extends MembershipUnavailable {
 }
 
 /**
+ * Thrown (as a kind of {@link MembershipUnavailable}) when core answered with a 4xx that asking
+ * again cannot change: the request itself is what it refused. The caller does not retry it.
+ */
+export class MembershipNotRetryable extends MembershipUnavailable {
+  constructor(message = 'core refused the request') {
+    super(message)
+    this.name = 'MembershipNotRetryable'
+  }
+}
+
+/**
  * Thrown when core refuses to abandon an Organization that is live and fails its guard (another
  * member, a different sole member, 24 hours old or more, or suspended). Retrying cannot change
  * the answer, so the caller reports it instead.

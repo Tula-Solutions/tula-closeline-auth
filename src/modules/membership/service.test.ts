@@ -6,6 +6,7 @@ import {
   MembershipBusy,
   type MembershipClaims,
   MembershipNotAbandonable,
+  MembershipNotRetryable,
   MembershipRejected,
   MembershipUnavailable,
 } from '~/ports/membership'
@@ -324,6 +325,64 @@ describe('abandoning an Organization', () => {
 
     expect(await Membership.abandon({ membership, logger }, input)).toBe('unfinished')
     expect(calls).toHaveLength(1)
+  })
+
+  test('a 4xx that asking again cannot change is one call, unfinished, and logged by ids', async () => {
+    const { membership, calls } = scripted(new MembershipNotRetryable())
+    const { logger, lines } = quiet()
+
+    expect(await Membership.abandon({ membership, logger }, input)).toBe('unfinished')
+
+    expect(calls).toHaveLength(1)
+    expect(lines).toEqual([
+      { message: 'could not abandon an Organization', fields: { organizationId, userId: owner } },
+    ])
+  })
+
+  test('a core that never answers ends as unfinished at the bound, with the signal aborted', async () => {
+    let seen: AbortSignal | undefined
+    const membership = {
+      abandonOrganization: (call: { signal?: AbortSignal }) => {
+        seen = call.signal
+        return new Promise<void>(() => {})
+      },
+    } as unknown as MembershipClaims
+    const { logger } = quiet()
+
+    const outcome = await Membership.abandon({ membership, logger }, input, { boundMs: 20 })
+
+    expect(outcome).toBe('unfinished')
+    expect(seen?.aborted).toBe(true)
+  })
+
+  test('the pause honours Retry-After but is capped, and the next try follows it', async () => {
+    const { membership, calls } = scripted(new MembershipBusy(60_000), undefined)
+    const { logger } = quiet()
+    const pauses: number[] = []
+
+    const outcome = await Membership.abandon({ membership, logger }, input, {
+      sleep: async (ms) => void pauses.push(ms),
+    })
+
+    expect(outcome).toBe('done')
+    expect(pauses).toEqual([Membership.ABANDON_MAX_PAUSE_MS])
+    expect(calls).toHaveLength(2)
+  })
+
+  test('without a Retry-After the pauses are jittered: 50 to 150 ms, then 100 to 300 ms', async () => {
+    const { membership } = scripted(new MembershipUnavailable())
+    const { logger } = quiet()
+    const pauses: number[] = []
+
+    await Membership.abandon({ membership, logger }, input, {
+      sleep: async (ms) => void pauses.push(ms),
+    })
+
+    expect(pauses).toHaveLength(Membership.ABANDON_ATTEMPTS - 1)
+    expect(pauses[0]).toBeGreaterThanOrEqual(50)
+    expect(pauses[0]).toBeLessThanOrEqual(150)
+    expect(pauses[1]).toBeGreaterThanOrEqual(100)
+    expect(pauses[1]).toBeLessThanOrEqual(300)
   })
 
   test('nothing but ids is logged, whatever the failure says', async () => {

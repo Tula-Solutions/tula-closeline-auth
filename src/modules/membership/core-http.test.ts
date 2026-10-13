@@ -183,6 +183,32 @@ describe('how often a failing core reaches the error tracker', () => {
 })
 
 describe('an Organization abandoned over HTTP after the account failed to write', () => {
+  /** Another sign-up for the same address commits while core is answering this one. */
+  const loseAddress = (
+    base: Awaited<ReturnType<typeof setup>>['base'],
+    deps: Awaited<ReturnType<typeof setup>>['deps']
+  ) => {
+    const tenant = base.tenant.current
+    const createOrganization = deps.membership.createOrganization.bind(deps.membership)
+    deps.membership.createOrganization = async (input) => {
+      const created = await createOrganization(input)
+      await base.users.create({
+        id: crypto.randomUUID(),
+        projectId: tenant?.projectId ?? '',
+        environmentId: tenant?.environmentId ?? '',
+        email: EMAIL,
+        emailNormalized: EMAIL,
+        emailVerifiedAt: base.clock.now(),
+        firstName: null,
+        lastName: null,
+        createdAt: base.clock.now(),
+        identityId: crypto.randomUUID(),
+        credentialId: crypto.randomUUID(),
+        passwordHash: '$argon2id$rival',
+      })
+      return created
+    }
+  }
   /** Reports about an Organization left without an owner (the 500 itself is reported too). */
   const orphanReports = (base: { reported: { error: unknown }[] }) =>
     base.reported.filter(
@@ -192,14 +218,12 @@ describe('an Organization abandoned over HTTP after the account failed to write'
     core.requests.filter((request) => request.path.endsWith('/abandon'))
 
   test('sign-up sends core the address and name, and a failed account write abandons the Organization it made', async () => {
-    const { core, base, verify } = await setup()
-    base.users.create = async () => {
-      throw new Error('connection reset')
-    }
+    const { core, base, deps, verify } = await setup()
+    loseAddress(base, deps)
 
     const failed = await verify()
 
-    expect(failed.status).toBe(500)
+    expect(failed.status).toBe(409)
     const [create] = core.requests
     expect(create?.path).toBe('/internal/organizations')
     expect(create?.body).toMatchObject({ email: EMAIL, name: null })
@@ -211,11 +235,9 @@ describe('an Organization abandoned over HTTP after the account failed to write'
     expect(orphanReports(base)).toHaveLength(0)
   })
 
-  test('core refusing the abandon (409) is reported once and the answer is still the 500', async () => {
-    const { core, base, verify } = await setup()
-    base.users.create = async () => {
-      throw new Error('connection reset')
-    }
+  test('core refusing the abandon (409) is reported once and the answer is still the 409', async () => {
+    const { core, base, deps, verify } = await setup()
+    loseAddress(base, deps)
     // Scripted answers go to the next requests in order: the create, then the abandon.
     core.script(
       {
@@ -232,7 +254,7 @@ describe('an Organization abandoned over HTTP after the account failed to write'
 
     const failed = await verify()
 
-    expect(failed.status).toBe(500)
+    expect(failed.status).toBe(409)
     expect(abandonRequests(core)).toHaveLength(1)
     expect(orphanReports(base)).toHaveLength(1)
     const everything = JSON.stringify([base.logLines, base.reported.map((r) => String(r.error))])
@@ -242,10 +264,8 @@ describe('an Organization abandoned over HTTP after the account failed to write'
   })
 
   test('busy twice then done: three requests, one key, no report', async () => {
-    const { core, base, verify } = await setup()
-    base.users.create = async () => {
-      throw new Error('connection reset')
-    }
+    const { core, base, deps, verify } = await setup()
+    loseAddress(base, deps)
     const org = `org_${'b'.repeat(32)}`
     core.script(
       { kind: 'json', status: 200, body: { organizationId: org, role: 'owner' } },
@@ -256,7 +276,7 @@ describe('an Organization abandoned over HTTP after the account failed to write'
 
     const failed = await verify()
 
-    expect(failed.status).toBe(500)
+    expect(failed.status).toBe(409)
     const sent = abandonRequests(core)
     expect(sent).toHaveLength(3)
     expect(new Set(sent.map((r) => r.headers['idempotency-key'])).size).toBe(1)

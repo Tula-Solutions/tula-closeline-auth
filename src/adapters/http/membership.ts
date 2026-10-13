@@ -28,6 +28,7 @@ import {
   type MembershipClaims,
   MembershipFault,
   MembershipNotAbandonable,
+  MembershipNotRetryable,
   MembershipRefused,
   MembershipRejected,
   MembershipUnavailable,
@@ -440,7 +441,21 @@ export function createHttpMembership(options: HttpMembershipOptions): Membership
         throw new MembershipBusy(answer.retryAfterMs, 'core answered HTTP 503')
       }
       if (answer.status !== 200) {
-        refuse('abandonOrganization', answer)
+        try {
+          refuse('abandonOrganization', answer)
+        } catch (error) {
+          // A 4xx other than the guard's 409 means the request is what core refused: asking
+          // again changes nothing. (A rejected secret is not retried either.)
+          if (
+            answer.status >= 400 &&
+            answer.status < 500 &&
+            !(error instanceof MembershipNotAbandonable) &&
+            !(error instanceof MembershipRejected)
+          ) {
+            throw new MembershipNotRetryable(`core answered HTTP ${answer.status}`)
+          }
+          throw error
+        }
         return
       }
       const done = accept(internalAbandonOrganizationResponseSchema, answer)
