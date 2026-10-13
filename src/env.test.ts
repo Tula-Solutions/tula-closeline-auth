@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import { databaseUrl, LOCAL_MASTER_KEY, loadEnv, masterKey, publicUrl } from './env'
 
 test('configuration falls back to defaults for everything but the environment', () => {
@@ -76,20 +76,24 @@ test('a grace period plus drain timeout of exactly 60 s is accepted', () => {
   expect(env.SHUTDOWN_GRACE_MS + env.SHUTDOWN_TIMEOUT_MS).toBe(60_000)
 })
 
-test('a deploy outside local must set the database, the master key and the public URL', () => {
+test('a deploy outside local must set the database, the master key, the public URL and core', () => {
   expect(() => loadEnv({ ENVIRONMENT: 'prod', REGION: 'us' })).toThrow(
-    /DATABASE_URL.*AUTH_MASTER_KEY.*PUBLIC_URL/s
+    /DATABASE_URL.*AUTH_MASTER_KEY.*PUBLIC_URL.*CORE_BASE_URL.*CORE_INTERNAL_TOKEN/s
   )
 })
 
-test('a deploy outside local boots with all three set', () => {
-  const env = loadEnv({
-    ENVIRONMENT: 'prod',
-    REGION: 'eu',
-    DATABASE_URL: 'postgres://closeline_auth:x@db/closeline',
-    AUTH_MASTER_KEY: 'ab'.repeat(32),
-    PUBLIC_URL: 'https://auth.eu.example.com/',
-  })
+const DEPLOYED = {
+  ENVIRONMENT: 'prod',
+  REGION: 'eu',
+  DATABASE_URL: 'postgres://closeline_auth:x@db/closeline',
+  AUTH_MASTER_KEY: 'ab'.repeat(32),
+  PUBLIC_URL: 'https://auth.eu.example.com/',
+  CORE_BASE_URL: 'https://core.eu.internal.example.com',
+  CORE_INTERNAL_TOKEN: 'c'.repeat(32),
+}
+
+test('a deploy outside local boots with everything set', () => {
+  const env = loadEnv(DEPLOYED)
 
   expect(publicUrl(env)).toBe('https://auth.eu.example.com')
   expect(masterKey(env)).toBe('ab'.repeat(32))
@@ -114,4 +118,56 @@ test('local falls back to the development key and the compose database, and nowh
   expect(masterKey(env)).toBe(LOCAL_MASTER_KEY)
   expect(databaseUrl(env, { POSTGRES_PORT: '5434' })).toContain('127.0.0.1:5434/closeline')
   expect(publicUrl(env)).toBe('http://localhost:3000')
+})
+
+describe('the core service settings', () => {
+  const LOCAL = { ENVIRONMENT: 'local', REGION: 'us' }
+
+  test('local runs without core (the placeholder), or with both settings, over http', () => {
+    expect(loadEnv(LOCAL).CORE_BASE_URL).toBeUndefined()
+    expect(
+      loadEnv({
+        ...LOCAL,
+        CORE_BASE_URL: 'http://127.0.0.1:3100',
+        CORE_INTERNAL_TOKEN: 'x'.repeat(32),
+      }).CORE_BASE_URL
+    ).toBe('http://127.0.0.1:3100')
+  })
+
+  test.each([
+    ['a URL without its token', { CORE_BASE_URL: 'http://127.0.0.1:3100' }],
+    ['a token without its URL', { CORE_INTERNAL_TOKEN: 'x'.repeat(32) }],
+  ])(
+    'local refuses %s: half a setting would fall back to the placeholder unseen',
+    (_name, source) => {
+      expect(() => loadEnv({ ...LOCAL, ...source })).toThrow(/CORE_/)
+    }
+  )
+
+  test.each([
+    ['plain http', { CORE_BASE_URL: 'http://core.example.com' }],
+    ['a URL with credentials', { CORE_BASE_URL: 'https://user:pw@core.example.com' }],
+    ['a URL with a query', { CORE_BASE_URL: 'https://core.example.com/?a=1' }],
+    ['a URL that is not http', { CORE_BASE_URL: 'ftp://core.example.com' }],
+    ['a token of 31 characters', { CORE_INTERNAL_TOKEN: 'c'.repeat(31) }],
+    ['a token with a space', { CORE_INTERNAL_TOKEN: `${'c'.repeat(32)} x` }],
+    ['no URL', { CORE_BASE_URL: undefined }],
+    ['no token', { CORE_INTERNAL_TOKEN: undefined }],
+  ])('a deployment outside local refuses %s', (_name, source) => {
+    expect(() => loadEnv({ ...DEPLOYED, ...source })).toThrow()
+  })
+
+  test('a refused token is never echoed in the error', () => {
+    const secret = 'Sup3rSecret-but-with a space-inside-it'
+
+    let message = ''
+    try {
+      loadEnv({ ...DEPLOYED, CORE_INTERNAL_TOKEN: secret })
+    } catch (error) {
+      message = String(error instanceof Error ? error.message : error)
+    }
+
+    expect(message).toContain('CORE_INTERNAL_TOKEN')
+    expect(message).not.toContain('Sup3rSecret')
+  })
 })

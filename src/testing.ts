@@ -55,6 +55,8 @@ export function createTestDeps(
     DATABASE_URL: 'postgres://closeline_auth:unused@127.0.0.1:1/closeline',
     AUTH_MASTER_KEY: 'ab'.repeat(32),
     PUBLIC_URL: 'https://auth.test.example.com',
+    CORE_BASE_URL: 'https://core.test.example.com',
+    CORE_INTERNAL_TOKEN: 'test-core-token-0123456789abcdef-test',
     ...overrides.env,
   })
 

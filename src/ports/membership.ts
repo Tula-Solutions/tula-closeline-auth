@@ -1,7 +1,13 @@
-import type { OrganizationId, Role, UserId } from 'tula-closeline-contract'
+import type { OrganizationId, OrganizationStatus, Role, UserId } from 'tula-closeline-contract'
 
 /** The Organization a user belongs to and their role in it: what a token's `org` and `role` say. */
 export type Membership = { organizationId: OrganizationId; role: Role }
+
+/**
+ * What the lookup for an existing user returns: their {@link Membership} and the status of the
+ * Organization (core's answer; `modules/membership` decides what each status means for a token).
+ */
+export type MembershipLookup = Membership & { organizationStatus: OrganizationStatus }
 
 /** Why the core service refused a membership step; the caller turns it into a contract error. */
 export type MembershipRefusal = 'invitation_invalid' | 'organization_name_invalid'
@@ -62,11 +68,12 @@ export interface MembershipClaims {
   }): Promise<Membership>
 
   /**
-   * The Organization and role to stamp for an existing user, or `null` if they have none (a
-   * fault: a sign-up never leaves an account without one).
+   * The Organization, role and Organization status for an existing user, or `null` if they have
+   * none (a fault: a sign-up never leaves an account without one). An adapter retries this read
+   * once on a transient failure, inside the bound the caller enforces.
    *
    * @param signal - As for {@link MembershipClaims.createOrganization}.
    * @throws MembershipUnavailable on any failure.
    */
-  forUser(userId: UserId, signal?: AbortSignal): Promise<Membership | null>
+  forUser(userId: UserId, signal?: AbortSignal): Promise<MembershipLookup | null>
 }

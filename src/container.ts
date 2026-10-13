@@ -9,6 +9,7 @@ import {
   systemClock,
 } from 'tula-closeline-kit'
 import { HibpBreachChecker } from '~/adapters/breach/hibp'
+import { createHttpMembership } from '~/adapters/http/membership'
 import { MemoryLockout } from '~/adapters/memory/lockout'
 import { MemoryRateLimiter } from '~/adapters/memory/rate-limiter'
 import { createPlaceholderMembership } from '~/adapters/placeholder/membership'
@@ -139,6 +140,26 @@ export type ContainerOptions = {
   logDestination?: LogDestination
 }
 
+/**
+ * Chooses the membership adapter: the HTTP one when core is configured. Only `local` may run
+ * without it (on the placeholder, which never invents a membership); anywhere else a missing
+ * configuration is an error here as well as in {@link loadEnv}, so the placeholder can never
+ * serve a real deployment.
+ */
+export function createMembership(env: Env, logger: Pick<Logger, 'warn'>): MembershipClaims {
+  if (env.CORE_BASE_URL !== undefined && env.CORE_INTERNAL_TOKEN !== undefined) {
+    return createHttpMembership({
+      baseUrl: env.CORE_BASE_URL,
+      token: env.CORE_INTERNAL_TOKEN,
+      logger,
+    })
+  }
+  if (env.ENVIRONMENT === 'local') {
+    return createPlaceholderMembership()
+  }
+  throw new Error('CORE_BASE_URL and CORE_INTERNAL_TOKEN are required outside local')
+}
+
 /** The single composition root: the only place adapters and process-wide objects are constructed. */
 export function createContainer(env: Env = loadEnv(), options: ContainerOptions = {}): Container {
   const logger = createLogger({
@@ -181,8 +202,7 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     signingKeys: createPostgresSigningKeyStore(database.db),
     secretBox: createSecretBox(masterKey(env)),
     keyedHash: createKeyedHash(masterKey(env)),
-    // Placeholder until the core service exists (ticket 1.9); it never invents a membership.
-    membership: createPlaceholderMembership(),
+    membership: createMembership(env, logger),
     users: new PostgresUserRepository(database.db),
     flowAttempts: new PostgresFlowAttemptStore(database.db),
     verificationTokens: new PostgresVerificationTokenStore(database.db),
