@@ -19,6 +19,11 @@ export interface NewUser extends Omit<UserRecord, 'bannedAt' | 'lastSignInAt'> {
   credentialId: string
   /** The argon2id hash of the password chosen at sign-up. */
   passwordHash: string
+  /**
+   * The abandon case (hub issue 36) to resolve as `done` in the same transaction as the account,
+   * so a committed account can never leave an open case. Absent for an invitation sign-up.
+   */
+  resolvesAbandonCase?: string
 }
 
 /** A user as a password sign-in reads them: with the stored hash and when it was set. */

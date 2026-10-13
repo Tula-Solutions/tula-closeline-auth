@@ -51,13 +51,13 @@ describe('purging expired sign-in data', () => {
       tenant
     )
 
-    expect(result).toEqual({ attempts: 12, tokens: 7, counters: 0 })
+    expect(result).toEqual({ attempts: 12, tokens: 7, counters: 0, abandonCases: 0 })
     // A full batch means "again"; the first short one ends the loop.
     expect(attempts.removed).toEqual([5, 5, 2])
     expect(tokens.removed).toEqual([5, 2])
     expect(await deps.flowAttempts.findById(tenant.environmentId, live ?? '')).not.toBeNull()
     const again = await Retention.purgeExpired(deps, tenant)
-    expect(again).toEqual({ attempts: 0, tokens: 0, counters: 0 })
+    expect(again).toEqual({ attempts: 0, tokens: 0, counters: 0, abandonCases: 0 })
   })
 
   test('an exact multiple of the limit takes one more, empty, statement to be sure', async () => {
@@ -127,7 +127,7 @@ describe('purging expired counters', () => {
 
     const result = await Retention.purgeExpired({ ...deps, counterPurger }, tenant)
 
-    expect(result).toEqual({ attempts: 0, tokens: 0, counters: 12 })
+    expect(result).toEqual({ attempts: 0, tokens: 0, counters: 12, abandonCases: 0 })
     expect(asked).toEqual([5, 5, 5])
   })
 
@@ -157,6 +157,7 @@ describe('a run', () => {
       attempts: 0,
       tokens: 0,
       counters: 0,
+      abandonCases: 0,
     })
   })
 
@@ -174,6 +175,7 @@ describe('a run', () => {
       attempts: 3,
       tokens: 0,
       counters: 0,
+      abandonCases: 0,
     })
   })
 

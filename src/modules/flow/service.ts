@@ -7,12 +7,14 @@ import {
 } from 'tula-closeline-contract'
 import { isAppError } from 'tula-closeline-kit'
 import { z } from 'zod'
-import type { Container } from '~/container'
+import { type Container, reportSafely } from '~/container'
 import { describeError } from '~/describe-error'
 import { fail, MembershipFaulted, MembershipOutage, rateLimited } from '~/errors'
+import { resolveRequestId } from '~/http/request-id'
 import { randomToken, sha256Hex, timingSafeEqual } from '~/lib/crypto'
 import { durationToMs } from '~/lib/duration'
 import { maskEmail, normalizeEmail, parseEmail } from '~/lib/email'
+import { ABANDON_GRACE_MS } from '~/modules/abandon/service'
 import { composeMemberName } from '~/modules/membership/profile'
 import * as Membership from '~/modules/membership/service'
 import * as Passwords from '~/modules/password/service'
@@ -342,7 +344,7 @@ export async function reportOrphan(
  * failed sign-up's answer is not changed by what it finds. Exported for its tests.
  */
 export async function settleOrphan(
-  deps: Pick<Container, 'logger' | 'rateLimiter' | 'membership'>,
+  deps: Pick<Container, 'logger' | 'rateLimiter' | 'membership' | 'abandonCases'>,
   context: ClientContext,
   status: number,
   orphan: {
@@ -351,9 +353,11 @@ export async function settleOrphan(
     attemptId: string
     why: string
     abandon: boolean
+    /** The abandon case to resolve with the answer (a bare uuid), and its environment. */
+    abandonCase?: { id: string; environmentId: string }
   }
 ): Promise<void> {
-  const { abandon, ...ids } = orphan
+  const { abandon, abandonCase, ...ids } = orphan
   let outcome: Membership.AbandonOutcome | 'not_asked' = 'not_asked'
   if (abandon) {
     try {
@@ -366,6 +370,16 @@ export async function settleOrphan(
       outcome = 'unfinished'
     }
   }
+  // The answer is final for `done` and `refused`; an unfinished abandon leaves the case open for
+  // the sweep. A failed resolve is harmless: the sweep abandons again (core's answer is by end
+  // state) and resolves then.
+  if (abandonCase && (outcome === 'done' || outcome === 'refused')) {
+    try {
+      await deps.abandonCases.resolve(abandonCase.environmentId, abandonCase.id, outcome)
+    } catch {
+      deps.logger.warn('an abandon case could not be resolved', { caseId: abandonCase.id })
+    }
+  }
   if (outcome === 'done') {
     deps.logger.warn('an Organization with no owner was abandoned', ids)
     return
@@ -374,6 +388,47 @@ export async function settleOrphan(
     ...ids,
     why: `${ids.why}; abandon ${outcome === 'not_asked' ? 'not asked' : outcome}`,
   })
+}
+
+/**
+ * Fills in the Organization id of the attempt's abandon case once core has answered. Best effort:
+ * if it fails the case stays unlearned and the sweep finds the Organization by the user id. A
+ * unique violation (another case already holds this Organization) resolves this case as
+ * `gave_up` in a new transaction and is reported by ids; the sign-up goes on. Never throws.
+ */
+async function learnOrganization(
+  deps: Pick<Container, 'logger' | 'abandonCases' | 'reportError'>,
+  _context: ClientContext,
+  tenant: Tenant,
+  found: { caseId: string; organizationId: string; userId: string; attemptId: string }
+): Promise<void> {
+  const { caseId, organizationId, userId, attemptId } = found
+  try {
+    const learned = await deps.abandonCases.learn(tenant.environmentId, caseId, organizationId)
+    if (learned === 'conflict') {
+      await deps.abandonCases.resolve(tenant.environmentId, caseId, 'gave_up')
+      deps.logger.warn('another abandon case already holds this Organization', {
+        caseId,
+        organizationId,
+        userId,
+        attemptId,
+      })
+      reportSafely(
+        deps,
+        new Error(
+          `abandon case ${caseId} (user ${userId}, attempt ${attemptId}) found organization ` +
+            `${organizationId}, which another case already holds; reconcile`
+        ),
+        { requestId: resolveRequestId(undefined), method: 'POST', path: 'sign-up', status: 500 }
+      )
+    }
+  } catch (error) {
+    deps.logger.warn('the Organization id could not be recorded on the abandon case', {
+      caseId,
+      attemptId,
+      error: describeError(error),
+    })
+  }
 }
 
 /**
@@ -482,6 +537,23 @@ export async function verifyEmail(
     throw fail(AUTH_ERRORS['flow.invalid_step'])
   }
   const userUuid = formatId('usr', userId) as UserId
+  // An Owner's sign-up is recorded before core is asked, in a transaction of its own, so a crash
+  // between core's answer and the account insert cannot lose the Organization. If it cannot be
+  // recorded nothing is created at core and the request fails (500, nothing to undo). An
+  // invitation sign-up joins an Organization with other members and is never recorded.
+  const abandonCaseId = join.kind === 'create' ? attempt.id : undefined
+  if (abandonCaseId !== undefined) {
+    await deps.abandonCases.record({
+      id: abandonCaseId,
+      projectId: tenant.projectId,
+      environmentId: tenant.environmentId,
+      organizationId: null,
+      userId,
+      attemptId: attempt.id,
+      attemptExpiresAt: attempt.expiresAt,
+      graceMs: ABANDON_GRACE_MS,
+    })
+  }
   let membership: Awaited<ReturnType<typeof Membership.join>>
   try {
     membership = await Membership.join(deps, userUuid, join, `signup:${attempt.id}`)
@@ -499,6 +571,14 @@ export async function verifyEmail(
       await reportMembershipFault(deps, context, { userId: userUuid, attemptId: attempt.id })
     }
     throw error
+  }
+  if (abandonCaseId !== undefined) {
+    await learnOrganization(deps, context, tenant, {
+      caseId: abandonCaseId,
+      organizationId: membership.organizationId,
+      userId: userUuid,
+      attemptId: attempt.id,
+    })
   }
   // From here core has made an Organization: if the account is not written, nobody owns it.
   // The request abandons it in exactly one case (below): the address is held by a different
@@ -529,6 +609,7 @@ export async function verifyEmail(
       identityId: deps.ids.next(),
       credentialId: deps.ids.next(),
       passwordHash: state.passwordHash,
+      ...(abandonCaseId !== undefined ? { resolvesAbandonCase: abandonCaseId } : {}),
     })
     if (!created) {
       // A unique violation: this user id, or this address, is already taken.
@@ -544,6 +625,9 @@ export async function verifyEmail(
             attemptId: attempt.id,
             why: 'the address went to another sign-up',
             abandon: join.kind === 'create',
+            ...(abandonCaseId !== undefined
+              ? { abandonCase: { id: abandonCaseId, environmentId: tenant.environmentId } }
+              : {}),
           })
         } else {
           await report('the account could not be written and no other holder was proven', 409)

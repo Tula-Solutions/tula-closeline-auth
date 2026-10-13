@@ -5,6 +5,12 @@ type Stored = { user: UserRecord; passwordHash: string; passwordChangedAt: Date 
 /** Users in process memory, for unit tests; behaves like the Postgres repository. */
 export class MemoryUserRepository implements UserRepository {
   readonly #byId = new Map<string, Stored>()
+  readonly #resolveCase: ((environmentId: string, caseId: string) => Promise<unknown>) | undefined
+
+  /** @param resolveCase - Resolves an abandon case as `done`, run with each account created. */
+  constructor(resolveCase?: (environmentId: string, caseId: string) => Promise<unknown>) {
+    this.#resolveCase = resolveCase
+  }
 
   /** @inheritdoc */
   async findById(environmentId: string, id: string): Promise<UserRecord | null> {
@@ -41,13 +47,16 @@ export class MemoryUserRepository implements UserRepository {
     ) {
       return false
     }
-    const { identityId: _i, credentialId: _c, passwordHash, ...record } = user
+    const { identityId: _i, credentialId: _c, passwordHash, resolvesAbandonCase, ...record } = user
     const stored: Stored = {
       user: { ...record, bannedAt: null, lastSignInAt: null },
       passwordHash,
       passwordChangedAt: user.createdAt,
     }
     this.#byId.set(user.id, stored)
+    if (resolvesAbandonCase !== undefined) {
+      await this.#resolveCase?.(user.environmentId, resolvesAbandonCase)
+    }
     return true
   }
 

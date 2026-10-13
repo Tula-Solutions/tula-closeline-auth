@@ -1,4 +1,5 @@
 import { createDb, type Database } from 'tula-closeline-db'
+import { createPostgresAbandonCases } from '~/adapters/postgres/abandon-cases'
 import {
   createPostgresCounterPurger,
   createPostgresLockout,
@@ -80,6 +81,7 @@ export async function createPostgresDeps(): Promise<
   const deps = Object.assign(memory, {
     fixedProject: createPostgresFixedProject(handle.db),
     signingKeys: createPostgresSigningKeyStore(handle.db),
+    abandonCases: createPostgresAbandonCases(handle.db),
     users: new PostgresUserRepository(handle.db),
     flowAttempts: new PostgresFlowAttemptStore(handle.db),
     verificationTokens: new PostgresVerificationTokenStore(handle.db),
