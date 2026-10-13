@@ -11,7 +11,7 @@ const MESSAGE: MailMessage = {
 }
 const SENSITIVE = ['zed.leak', 'Subject-marker-9f3', '481516', 'tok-marker-77c', 'app.example.com']
 
-type Seen = { method: string; path: string; contentType: string | null; body: string }
+type Seen = { method: string; url: string; path: string; contentType: string | null; body: string }
 type Stand = {
   url: string
   seen: Seen[]
@@ -33,6 +33,7 @@ function stand(respond: Stand['respond'] = () => Response.json({ ID: 'abc' })): 
     async fetch(request) {
       seen.push({
         method: request.method,
+        url: request.url,
         path: new URL(request.url).pathname,
         contentType: request.headers.get('content-type'),
         body: await request.clone().text(),
@@ -108,7 +109,16 @@ describe('the request', () => {
 
     await mailer.send(MESSAGE)
 
-    expect(mailpit.seen[0]?.path).toBe('/api/v1/send')
+    expect(mailpit.seen[0]?.url).toBe(`${mailpit.url}/api/v1/send`)
+  })
+
+  test('the request goes to exactly <origin>/api/v1/send', async () => {
+    const mailpit = stand()
+    const { mailer } = connect(mailpit)
+
+    await mailer.send(MESSAGE)
+
+    expect(mailpit.seen[0]?.url).toBe(`${mailpit.url}/api/v1/send`)
   })
 })
 
@@ -181,6 +191,42 @@ describe('failure', () => {
     expectNoLeak([...log.lines, String((error as Error).message)])
   })
 
+  test('a timeout is retried within the bound, then fails as a timeout', async () => {
+    const mailpit = stand(async () => {
+      await Bun.sleep(1_000)
+      return Response.json({ ID: 'late' })
+    })
+    const { mailer, log } = connect(mailpit, { timeoutMs: 100 })
+
+    const error = await mailer.send(MESSAGE).then(
+      () => undefined,
+      (caught: unknown) => caught
+    )
+
+    expect((error as Error).message).toContain('timeout')
+    expect((error as Error).message).toContain('3 attempts')
+    expect(log.lines).toHaveLength(2)
+    expect(mailpit.seen).toHaveLength(3)
+  })
+
+  test('an answer that never ends is not read, and the send still settles', async () => {
+    const mailpit = stand(
+      () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('zed.leak@example.com 481516 '))
+            },
+          })
+        )
+    )
+    const { mailer, log } = connect(mailpit, { timeoutMs: 2_000 })
+
+    await mailer.send(MESSAGE)
+
+    expectNoLeak(log.lines)
+  })
+
   test('nothing listening is retried, then rejects without leaking', async () => {
     const closed = stand()
     await closed.stop()
@@ -219,5 +265,45 @@ describe('failure', () => {
 
     expect(pauses).toHaveLength(2)
     expect(mailpit.seen).toHaveLength(3)
+  })
+})
+
+describe('proxy variables', () => {
+  const PROXY_VARIABLES = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY']
+
+  test('the message goes straight to the loopback mailbox, whatever the proxy variables say', async () => {
+    const proxy = stand()
+    const mailbox = stand()
+    const saved = new Map(PROXY_VARIABLES.map((name) => [name, process.env[name]]))
+    const noProxy = [process.env.NO_PROXY, process.env.no_proxy]
+    try {
+      for (const name of PROXY_VARIABLES) {
+        process.env[name] = proxy.url
+      }
+      delete process.env.NO_PROXY
+      delete process.env.no_proxy
+      const { mailer } = connect(mailbox)
+
+      await mailer.send(MESSAGE)
+
+      expect(proxy.seen).toHaveLength(0)
+      expect(mailbox.seen).toHaveLength(1)
+    } finally {
+      for (const [name, value] of saved) {
+        if (value === undefined) {
+          delete process.env[name]
+        } else {
+          process.env[name] = value
+        }
+      }
+      for (const [name, value] of [
+        ['NO_PROXY', noProxy[0]],
+        ['no_proxy', noProxy[1]],
+      ] as const) {
+        if (value !== undefined) {
+          process.env[name] = value
+        }
+      }
+    }
   })
 })

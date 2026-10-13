@@ -1,3 +1,4 @@
+import { request } from 'node:http'
 import type { Logger } from 'tula-closeline-kit'
 import type { Mailer, MailMessage } from '~/ports/mailer'
 
@@ -34,12 +35,49 @@ export type MailpitMailerOptions = {
   from: string
   /** Where a retry is noted. It receives a status or a failure kind and an attempt number only. */
   logger?: Pick<Logger, 'warn'>
-  /** Injected for tests; defaults to the global `fetch`. */
-  fetch?: (input: string, init: RequestInit) => Promise<Response>
   /** One attempt's bound; defaults to {@link MAIL_ATTEMPT_TIMEOUT_MS}. */
   timeoutMs?: number
   /** How long to pause before a retry; defaults to a jittered 50 to 150 ms. */
   retryDelayMs?: () => number
+}
+
+/**
+ * One POST to a loopback origin, answered with the status line alone. It deliberately does not use
+ * `fetch`: Bun's `fetch` sends a request to `HTTP_PROXY` (and its relatives) unless `NO_PROXY`
+ * names the host, which would hand the verification code and the address to the proxy. `node:http`
+ * connects to the host and port it is given. A redirect is never followed, and the body of the
+ * answer is never read (it can echo the message): the connection is destroyed instead, which also
+ * bounds it. `signal` covers connecting, sending and waiting for the answer.
+ */
+function post(
+  target: { host: string; port: number; path: string },
+  body: string,
+  signal: AbortSignal
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const outgoing = request(
+      {
+        host: target.host,
+        port: target.port,
+        path: target.path,
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json',
+          'content-length': Buffer.byteLength(body),
+        },
+        agent: false,
+        signal,
+      },
+      (response) => {
+        const status = response.statusCode ?? 0
+        response.destroy()
+        resolve(status)
+      }
+    )
+    outgoing.on('error', reject)
+    outgoing.end(body)
+  })
 }
 
 /** How one attempt ended, and whether another attempt could help. */
@@ -57,8 +95,13 @@ type Outcome = { ok: true } | { ok: false; reason: string; retryable: boolean }
  * line or error made here contains the message or any part of it, nor the mailbox's answer.
  */
 export function createMailpitMailer(options: MailpitMailerOptions): Mailer {
-  const endpoint = new URL('/api/v1/send', options.baseUrl).href
-  const doFetch = options.fetch ?? globalThis.fetch
+  const origin = new URL(options.baseUrl)
+  const target = {
+    // A URL keeps the brackets of an IPv6 host; a socket address does not.
+    host: origin.hostname.replace(/^\[|\]$/g, ''),
+    port: origin.port === '' ? 80 : Number(origin.port),
+    path: '/api/v1/send',
+  }
   const timeoutMs = options.timeoutMs ?? MAIL_ATTEMPT_TIMEOUT_MS
   const retryDelayMs = options.retryDelayMs ?? defaultRetryDelayMs
 
@@ -66,19 +109,11 @@ export function createMailpitMailer(options: MailpitMailerOptions): Mailer {
   const attempt = async (body: string): Promise<Outcome> => {
     const signal = AbortSignal.timeout(timeoutMs)
     try {
-      const response = await doFetch(endpoint, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', accept: 'application/json' },
-        body,
-        redirect: 'manual',
-        signal,
-      })
-      // The answer is never read: it can echo the message. Free the socket instead.
-      await response.body?.cancel()
-      if (response.status >= 200 && response.status < 300) {
+      const status = await post(target, body, signal)
+      if (status >= 200 && status < 300) {
         return { ok: true }
       }
-      return { ok: false, reason: `HTTP ${response.status}`, retryable: response.status >= 500 }
+      return { ok: false, reason: `HTTP ${status}`, retryable: status >= 500 }
     } catch (error) {
       if (signal.aborted) {
         return { ok: false, reason: 'timeout', retryable: true }
