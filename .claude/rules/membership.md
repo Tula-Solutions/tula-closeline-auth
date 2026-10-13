@@ -5,6 +5,10 @@ paths:
   - "src/adapters/memory/membership*"
   - "src/ports/membership.ts"
   - "src/modules/membership/**"
+  - "src/modules/abandon/**"
+  - "src/ports/abandon-cases.ts"
+  - "src/adapters/postgres/abandon-cases.ts"
+  - "src/adapters/memory/abandon-cases.ts"
   - "src/modules/session/refresh.ts"
   - "src/modules/flow/service.ts"
   - "src/testing/fake-core.ts"
@@ -168,15 +172,51 @@ Nothing in this process can prove the account will never be written while the at
 double submit of one attempt (request A's insert throws while B, same user id, commits afterwards)
 or a commit that outlived a dropped connection would make an abandon delete a working Owner's
 Organization, because core's guard passes for the real Owner as sole member (a test pins the
-double submit). That abandon belongs to the sweep, which must first check that the attempt can no
-longer write an account (expired, or terminal) and then that a read shows no account for the user
-id, and only then call abandon with the case's key. Core frees the user id on abandon and creates
+double submit). That abandon belongs to the sweep (below). Core frees the user id on abandon and creates
 idempotently on the user id, so a client retrying one attempt after an abandon gets a fresh
 Organization.
 
-**Still open: a sweep.** Cases that are not finished in the request (core down for longer than
-the tries, a process that dies between core and the insert, an attempt that expires, a timed-out
-create whose Organization id was never learned) are only logged and reported by ids. A durable
-record needs a table in `tula-closeline-db`; no existing `auth` table fits (`events` is a
-delivery outbox with a retention floor, `flow_attempts` is purged ten seconds after expiry). Until
-then a person reconciles from the reports.
+## The abandon case and the sweep (hub issue 36, db `0.8.0`)
+
+**Recording.** An Owner sign-up (never an invitation) writes a case in `auth.abandon_cases`
+before core is asked, in its own committed transaction: case id = attempt id, user id, attempt
+expiry, Organization id unknown, grace `ABANDON_GRACE_MS` (5 s call bound + 25 s skew margin; the
+table's floor is 10 s). If recording fails the request fails with nothing created at core. After
+core answers, `learn` fills the Organization id (best effort; a failure leaves it for the sweep to
+find; a unique violation resolves the case `gave_up` in a new transaction and reports both ids).
+`users.create` runs `ABANDON_RESOLVE` (`done`) in the same transaction as the account, so a
+committed account never leaves an open case. Added per Owner sign-up: 3 statements (record,
+learn, and the resolve inside the account transaction), 2 extra short transactions. The db has no
+"not needed" outcome: `done` means the case is finished and nothing is owed (also used when the
+account exists or core holds no Organization); `refused` and `gave_up` are the two a person must
+look at. Residual: a retry of an attempt whose case was already resolved finds the record
+silently refused (`on conflict do nothing`); the holder check in `verifyEmail` stops it unless the
+other holder is deleted.
+
+**The sweep** (`modules/abandon`, `start` in `server.ts`, every `ABANDON_SWEEP_INTERVAL_MS`) has
+its own advisory lock `abandon-sweep`, not retention's: it calls core (seconds per case) while the
+purge must stay quick, and a slow core must never hold either back. It claims `ABANDON_SWEEP_BATCH_SIZE`
+cases as a lease (`leaseMs` = batch x 11 s + 25 s, longer than the whole batch worked one after
+another), calls core outside any transaction, then resolves in a new one; repeats while a claim
+is full; runs `giveUpSpent` once per run after the first claim. A case is due only after the
+attempt's expiry plus grace by the database clock. For each claimed case: past
+`ABANDON_SWEEP_MAX_ATTEMPTS` (40) claims it is resolved `gave_up` and reported; an account for
+the user id exists means resolve `done`, no call; an unlearned case is looked up by user id with
+the membership lookup (the one call that finds an Organization by user: none means core made
+nothing, resolve `done`; a lookup failure leaves the case); then `Membership.abandon` with
+key `abandon:<attempt id>`: 200 resolve `done`, 409 resolve `refused` and report (once: only the
+run whose resolve returned a row reports), 503 or network failure leaves the case for its next
+lease. A resolve that returns no row (lost lease) is not an error. Ids only in logs and reports.
+
+**Why abandoning is safe.** The account check and the call to core are not atomic. The ordering
+argument: a case is claimed only after expiry + grace (the table's `abandon_cases_due_after_expiry`
+check keeps it so); a request that loaded the attempt before expiry holds it for at most the 5 s
+call plus a few statements, so none can commit an account for this attempt after that point, and
+a read that found none stays true. Core's own guard (sole member is the user, under 24 hours, not
+suspended) is the second line. Do not shorten the grace below the call bound; do not add a path
+that writes an account for an expired attempt. Tests that move the fixed clock must back-date
+rows in Postgres (the database clock decides): see `abandon.integration.ts`.
+
+**Still open:** the in-request abandon of the narrow unique-violation case resolves its case
+(`done` or `refused`, `unfinished` stays open). An error inside the account transaction is only
+reported and left to the sweep.
