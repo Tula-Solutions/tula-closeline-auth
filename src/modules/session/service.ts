@@ -52,6 +52,29 @@ export type IssuedSession = {
   accessTokenExpiresAt: string
   refreshToken: string
   organization: { id: string; role: Role }
+  /** When the session ends whatever its activity; the refresh cookie's lifetime. Not a body field. */
+  absoluteExpiresAt: Date
+}
+
+/** The body a client that holds its refresh token receives: exactly the fields it always has. */
+export function bodyOf(session: IssuedSession) {
+  return {
+    sessionId: session.sessionId,
+    accessToken: session.accessToken,
+    accessTokenExpiresAt: session.accessTokenExpiresAt,
+    refreshToken: session.refreshToken,
+    organization: session.organization,
+  }
+}
+
+/** The body the `browser` client type receives: no refresh token (it travels in a cookie). */
+export function browserBodyOf(session: IssuedSession) {
+  return {
+    sessionId: session.sessionId,
+    accessToken: session.accessToken,
+    accessTokenExpiresAt: session.accessTokenExpiresAt,
+    organization: session.organization,
+  }
 }
 
 /** Derives a refresh token from the session or from the token it replaces (never stored). */
@@ -73,13 +96,15 @@ export function issued(
   sessionId: string,
   access: { accessToken: string; accessTokenExpiresAt: string },
   refreshToken: string,
-  membership: MembershipClaim
+  membership: MembershipClaim,
+  absoluteExpiresAt: Date
 ): IssuedSession {
   return {
     sessionId,
     ...access,
     refreshToken,
     organization: { id: membership.organizationId, role: membership.role },
+    absoluteExpiresAt,
   }
 }
 
@@ -135,7 +160,7 @@ export async function create(
       createdAt: now,
     }
   )
-  return issued(sessionId, access, refreshToken, input.membership)
+  return issued(sessionId, access, refreshToken, input.membership, absoluteExpiresAt)
 }
 
 /** Refuses a session that was revoked or has timed out. */

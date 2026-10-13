@@ -134,7 +134,7 @@ const ROUTES: [method: string, path: string, codes: Record<string, string[]>][] 
         'session.reuse_detected',
         'session.revoked',
       ],
-      '403': ['auth.no_organization', 'auth.user_banned'],
+      '403': ['auth.forbidden', 'auth.no_organization', 'auth.user_banned'],
       '410': ['organization.deleted'],
       '413': ['request.too_large'],
       '415': ['request.unsupported_media_type'],
@@ -147,6 +147,7 @@ const ROUTES: [method: string, path: string, codes: Record<string, string[]>][] 
     '/v1/client/sessions/sign-out',
     {
       '400': ['request.invalid'],
+      '403': ['auth.forbidden'],
       '413': ['request.too_large'],
       '415': ['request.unsupported_media_type'],
       '500': ['server.internal'],

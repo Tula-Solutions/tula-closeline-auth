@@ -1,4 +1,5 @@
 import { createRoute, type OpenAPIHono, z } from '@hono/zod-openapi'
+import type { Context } from 'hono'
 import type { Container } from '~/container'
 import { clientContext, noStore } from '~/http/client'
 import { BODY_ERRORS, errorResponses } from '~/http/responses'
@@ -6,8 +7,12 @@ import { createRouter } from '~/http/router'
 import type { AppEnv } from '~/http/types'
 import * as Bootstrap from '~/modules/bootstrap/service'
 import { PASSWORD_POLICY } from '~/modules/password/rules'
+import { setRefreshCookie } from '~/modules/session/cookie'
+import * as Sessions from '~/modules/session/service'
 import {
   ATTEMPT_SECRET_HEADER,
+  browserFlowResponseSchema,
+  clientHeaderSchema,
   flowResponseSchema,
   passwordPolicySchema,
   passwordRequestSchema,
@@ -22,19 +27,41 @@ const attemptHeaders = z.object({
     .string()
     .optional()
     .openapi({ description: 'The attempt secret returned when the attempt started.' }),
-  'x-tula-client': z.enum(['web', 'ios', 'android', 'server']).optional(),
+  'x-tula-client': clientHeaderSchema.optional(),
 })
 const startHeaders = z.object({
-  'x-tula-client': z.enum(['web', 'ios', 'android', 'server']).optional().openapi({
-    description: 'The kind of client; defaults to web.',
+  'x-tula-client': clientHeaderSchema.optional().openapi({
+    description:
+      'The kind of client; defaults to web. `browser` gets the refresh token in a ' +
+      '`Set-Cookie` header instead of the body (see the `BrowserFlowResponse` shape).',
   }),
 })
 const idParams = z.object({ id: z.string().max(64) })
 
 const ok = {
   200: {
-    description: 'The attempt and its next step; tokens once it is complete.',
-    content: { 'application/json': { schema: flowResponseSchema } },
+    description:
+      'The attempt and its next step; tokens once it is complete. Two shapes, by client type: ' +
+      '`FlowResponse` (every client type but `browser`: `session.refreshToken` is in the body) ' +
+      'and `BrowserFlowResponse` (client type `browser`: no refresh token in the body; it is ' +
+      'set in the `Set-Cookie` header of the response that completes the attempt).',
+    headers: z.object({
+      'set-cookie': z
+        .string()
+        .optional()
+        .openapi({
+          description:
+            'Client type `browser`, on the response that completes the attempt only: the refresh ' +
+            'cookie `__Secure-tula_refresh` (`tula_refresh` in local development with ' +
+            '`SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session ' +
+            'lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`.',
+        }),
+    }),
+    content: {
+      'application/json': {
+        schema: z.union([flowResponseSchema, browserFlowResponseSchema]),
+      },
+    },
   },
 }
 
@@ -171,6 +198,24 @@ const policy = createRoute({
   },
 })
 
+/** The answer to a step in the shape the client type receives; sets the refresh cookie if due. */
+function shaped(
+  container: Container,
+  c: Context<AppEnv>,
+  context: Flow.ClientContext,
+  result: Flow.FlowResult
+) {
+  const { session } = result
+  if (session === undefined) {
+    return result
+  }
+  if (!context.cookie) {
+    return { ...result, session: Sessions.bodyOf(session) }
+  }
+  c.header('Set-Cookie', setRefreshCookie(container.env, session, container.clock.now()))
+  return { ...result, session: Sessions.browserBodyOf(session) }
+}
+
 /** Sign-up, sign-in and the password policy. */
 export function createFlowRouter(container: Container): OpenAPIHono<AppEnv> {
   const router = createRouter()
@@ -191,10 +236,9 @@ export function createFlowRouter(container: Container): OpenAPIHono<AppEnv> {
     noStore(c)
     const { id } = c.req.valid('param')
     const { code } = c.req.valid('json')
-    return c.json(
-      await Flow.verifyEmail(container, tenant(), ref(c, id), code, clientContext(container, c)),
-      200
-    )
+    const context = clientContext(container, c)
+    const result = await Flow.verifyEmail(container, tenant(), ref(c, id), code, context)
+    return c.json(shaped(container, c, context, result), 200)
   })
   router.openapi(resend, async (c) => {
     noStore(c)
@@ -209,16 +253,15 @@ export function createFlowRouter(container: Container): OpenAPIHono<AppEnv> {
   })
   router.openapi(password, async (c) => {
     noStore(c)
-    return c.json(
-      await Flow.submitPassword(
-        container,
-        tenant(),
-        ref(c, c.req.valid('param').id),
-        c.req.valid('json'),
-        clientContext(container, c)
-      ),
-      200
+    const context = clientContext(container, c)
+    const result = await Flow.submitPassword(
+      container,
+      tenant(),
+      ref(c, c.req.valid('param').id),
+      c.req.valid('json'),
+      context
     )
+    return c.json(shaped(container, c, context, result), 200)
   })
   router.openapi(policy, (c) =>
     c.json({ minLength: PASSWORD_POLICY.minLength, maxLength: PASSWORD_POLICY.maxLength }, 200)

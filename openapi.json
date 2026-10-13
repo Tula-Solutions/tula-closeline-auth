@@ -97,6 +97,63 @@
           "organization"
         ]
       },
+      "BrowserFlowResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["sign_in", "sign_up"]
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "step": {
+            "$ref": "#/components/schemas/FlowStep"
+          },
+          "attemptSecret": {
+            "type": "string",
+            "description": "Returned once, when the attempt starts."
+          },
+          "session": {
+            "$ref": "#/components/schemas/BrowserSessionTokens"
+          }
+        },
+        "required": ["id", "kind", "expiresAt", "step"]
+      },
+      "BrowserSessionTokens": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "accessToken": {
+            "type": "string"
+          },
+          "accessTokenExpiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "organization": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": ["owner", "admin", "manager", "rep"]
+              }
+            },
+            "required": ["id", "role"]
+          }
+        },
+        "required": ["sessionId", "accessToken", "accessTokenExpiresAt", "organization"],
+        "additionalProperties": false
+      },
       "SignUpRequest": {
         "type": "object",
         "properties": {
@@ -710,11 +767,11 @@
           {
             "schema": {
               "type": "string",
-              "enum": ["web", "ios", "android", "server"],
-              "description": "The kind of client; defaults to web."
+              "enum": ["web", "ios", "android", "server", "browser"],
+              "description": "The kind of client; defaults to web. `browser` gets the refresh token in a `Set-Cookie` header instead of the body (see the `BrowserFlowResponse` shape)."
             },
             "required": false,
-            "description": "The kind of client; defaults to web.",
+            "description": "The kind of client; defaults to web. `browser` gets the refresh token in a `Set-Cookie` header instead of the body (see the `BrowserFlowResponse` shape).",
             "name": "x-tula-client",
             "in": "header"
           }
@@ -731,11 +788,28 @@
         },
         "responses": {
           "200": {
-            "description": "The attempt and its next step; tokens once it is complete.",
+            "description": "The attempt and its next step; tokens once it is complete. Two shapes, by client type: `FlowResponse` (every client type but `browser`: `session.refreshToken` is in the body) and `BrowserFlowResponse` (client type `browser`: no refresh token in the body; it is set in the `Set-Cookie` header of the response that completes the attempt).",
+            "headers": {
+              "set-cookie": {
+                "schema": {
+                  "type": "string",
+                  "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`."
+                },
+                "required": false,
+                "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`."
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/FlowResponse"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FlowResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/BrowserFlowResponse"
+                    }
+                  ]
                 }
               }
             }
@@ -1120,7 +1194,7 @@
           {
             "schema": {
               "type": "string",
-              "enum": ["web", "ios", "android", "server"]
+              "enum": ["web", "ios", "android", "server", "browser"]
             },
             "required": false,
             "name": "x-tula-client",
@@ -1139,11 +1213,28 @@
         },
         "responses": {
           "200": {
-            "description": "The attempt and its next step; tokens once it is complete.",
+            "description": "The attempt and its next step; tokens once it is complete. Two shapes, by client type: `FlowResponse` (every client type but `browser`: `session.refreshToken` is in the body) and `BrowserFlowResponse` (client type `browser`: no refresh token in the body; it is set in the `Set-Cookie` header of the response that completes the attempt).",
+            "headers": {
+              "set-cookie": {
+                "schema": {
+                  "type": "string",
+                  "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`."
+                },
+                "required": false,
+                "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`."
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/FlowResponse"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FlowResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/BrowserFlowResponse"
+                    }
+                  ]
                 }
               }
             }
@@ -1589,7 +1680,7 @@
           {
             "schema": {
               "type": "string",
-              "enum": ["web", "ios", "android", "server"]
+              "enum": ["web", "ios", "android", "server", "browser"]
             },
             "required": false,
             "name": "x-tula-client",
@@ -1598,11 +1689,28 @@
         ],
         "responses": {
           "200": {
-            "description": "The attempt and its next step; tokens once it is complete.",
+            "description": "The attempt and its next step; tokens once it is complete. Two shapes, by client type: `FlowResponse` (every client type but `browser`: `session.refreshToken` is in the body) and `BrowserFlowResponse` (client type `browser`: no refresh token in the body; it is set in the `Set-Cookie` header of the response that completes the attempt).",
+            "headers": {
+              "set-cookie": {
+                "schema": {
+                  "type": "string",
+                  "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`."
+                },
+                "required": false,
+                "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`."
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/FlowResponse"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FlowResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/BrowserFlowResponse"
+                    }
+                  ]
                 }
               }
             }
@@ -1920,11 +2028,11 @@
           {
             "schema": {
               "type": "string",
-              "enum": ["web", "ios", "android", "server"],
-              "description": "The kind of client; defaults to web."
+              "enum": ["web", "ios", "android", "server", "browser"],
+              "description": "The kind of client; defaults to web. `browser` gets the refresh token in a `Set-Cookie` header instead of the body (see the `BrowserFlowResponse` shape)."
             },
             "required": false,
-            "description": "The kind of client; defaults to web.",
+            "description": "The kind of client; defaults to web. `browser` gets the refresh token in a `Set-Cookie` header instead of the body (see the `BrowserFlowResponse` shape).",
             "name": "x-tula-client",
             "in": "header"
           }
@@ -1941,11 +2049,28 @@
         },
         "responses": {
           "200": {
-            "description": "The attempt and its next step; tokens once it is complete.",
+            "description": "The attempt and its next step; tokens once it is complete. Two shapes, by client type: `FlowResponse` (every client type but `browser`: `session.refreshToken` is in the body) and `BrowserFlowResponse` (client type `browser`: no refresh token in the body; it is set in the `Set-Cookie` header of the response that completes the attempt).",
+            "headers": {
+              "set-cookie": {
+                "schema": {
+                  "type": "string",
+                  "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`."
+                },
+                "required": false,
+                "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`."
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/FlowResponse"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FlowResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/BrowserFlowResponse"
+                    }
+                  ]
                 }
               }
             }
@@ -2153,7 +2278,7 @@
           {
             "schema": {
               "type": "string",
-              "enum": ["web", "ios", "android", "server"]
+              "enum": ["web", "ios", "android", "server", "browser"]
             },
             "required": false,
             "name": "x-tula-client",
@@ -2172,11 +2297,28 @@
         },
         "responses": {
           "200": {
-            "description": "The attempt and its next step; tokens once it is complete.",
+            "description": "The attempt and its next step; tokens once it is complete. Two shapes, by client type: `FlowResponse` (every client type but `browser`: `session.refreshToken` is in the body) and `BrowserFlowResponse` (client type `browser`: no refresh token in the body; it is set in the `Set-Cookie` header of the response that completes the attempt).",
+            "headers": {
+              "set-cookie": {
+                "schema": {
+                  "type": "string",
+                  "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`."
+                },
+                "required": false,
+                "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`."
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/FlowResponse"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FlowResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/BrowserFlowResponse"
+                    }
+                  ]
                 }
               }
             }
@@ -2781,7 +2923,49 @@
       "post": {
         "tags": ["sessions"],
         "summary": "Refresh a session",
-        "description": "Trades a refresh token for new tokens. Each refresh token works once; presenting a spent one after a short grace period ends the whole session (`session.reuse_detected`). If the core service cannot answer, the answer is 503 `membership.unavailable` with `Retry-After` and the refresh token is not spent: send the same one again. A user whose Organization was deleted gets `organization.deleted` and the session ends.",
+        "description": "Trades a refresh token for new tokens. Each refresh token works once; presenting a spent one after a short grace period ends the whole session (`session.reuse_detected`). If the core service cannot answer, the answer is 503 `membership.unavailable` with `Retry-After` and the refresh token is not spent: send the same one again. A user whose Organization was deleted gets `organization.deleted` and the session ends. Client type `browser` (`x-tula-client: browser`) sends no body: the refresh token is read from the cookie only (a body or header token is ignored, a missing cookie is `session.invalid_token`), `Origin` is checked first (`auth.forbidden`), and the new refresh token is set in the cookie and omitted from the body.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Client type. `browser` reads the refresh token from the cookie only, ignores the body, and requires `Origin`; every other value reads it from the body."
+            },
+            "required": false,
+            "description": "Client type. `browser` reads the refresh token from the cookie only, ignores the body, and requires `Origin`; every other value reads it from the body.",
+            "name": "x-tula-client",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Client type `browser`: required, and exactly one of `SESSION_ALLOWED_ORIGINS`, else `auth.forbidden`."
+            },
+            "required": false,
+            "description": "Client type `browser`: required, and exactly one of `SESSION_ALLOWED_ORIGINS`, else `auth.forbidden`.",
+            "name": "origin",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Client type `browser`: when present it must be `same-origin`."
+            },
+            "required": false,
+            "description": "Client type `browser`: when present it must be `same-origin`.",
+            "name": "sec-fetch-site",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Client type `browser`: the refresh token, set by the sign-in, sign-up and refresh responses (`tula_refresh`, unprefixed and without `Secure`, when `SESSION_COOKIE_INSECURE=true` in local development)."
+            },
+            "required": false,
+            "description": "Client type `browser`: the refresh token, set by the sign-in, sign-up and refresh responses (`tula_refresh`, unprefixed and without `Secure`, when `SESSION_COOKIE_INSECURE=true` in local development).",
+            "name": "__Secure-tula_refresh",
+            "in": "cookie"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -2794,11 +2978,28 @@
         },
         "responses": {
           "200": {
-            "description": "New tokens.",
+            "description": "New tokens, in one of two shapes by client type: `SessionTokens` (every type but `browser`, refresh token in the body) or `BrowserSessionTokens` (`browser`, refresh token in the `Set-Cookie` header).",
+            "headers": {
+              "set-cookie": {
+                "schema": {
+                  "type": "string",
+                  "description": "Client type `browser`: `__Secure-tula_refresh=<token>; Path=/v1/client/sessions/; Max-Age=<remaining absolute lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`. Sign-out sends the same name, path and attributes with an empty value and `Max-Age=0`."
+                },
+                "required": false,
+                "description": "Client type `browser`: `__Secure-tula_refresh=<token>; Path=/v1/client/sessions/; Max-Age=<remaining absolute lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`. Sign-out sends the same name, path and attributes with an empty value and `Max-Age=0`."
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SessionTokens"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SessionTokens"
+                    },
+                    {
+                      "$ref": "#/components/schemas/BrowserSessionTokens"
+                    }
+                  ]
                 }
               }
             }
@@ -2914,10 +3115,18 @@
             }
           },
           "403": {
-            "description": "`auth.no_organization`: You do not belong to an Organization, so you cannot sign in.\n`auth.user_banned`: This account cannot sign in.",
+            "description": "`auth.forbidden`: You are not allowed to do this.\n`auth.no_organization`: You do not belong to an Organization, so you cannot sign in.\n`auth.user_banned`: This account cannot sign in.",
             "content": {
               "application/json": {
                 "examples": {
+                  "auth.forbidden": {
+                    "value": {
+                      "error": {
+                        "code": "auth.forbidden",
+                        "message": "You are not allowed to do this."
+                      }
+                    }
+                  },
                   "auth.no_organization": {
                     "value": {
                       "error": {
@@ -3186,7 +3395,49 @@
       "post": {
         "tags": ["sessions"],
         "summary": "Sign out",
-        "description": "Ends the session of a refresh token. Succeeds for an unknown or spent token too.",
+        "description": "Ends the session of a refresh token. Succeeds for an unknown or spent token too. Client type `browser` sends no body: the token is read from the cookie only, `Origin` is checked first (`auth.forbidden`), and the cookie is cleared whether or not a session was found.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Client type. `browser` reads the refresh token from the cookie only, ignores the body, and requires `Origin`; every other value reads it from the body."
+            },
+            "required": false,
+            "description": "Client type. `browser` reads the refresh token from the cookie only, ignores the body, and requires `Origin`; every other value reads it from the body.",
+            "name": "x-tula-client",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Client type `browser`: required, and exactly one of `SESSION_ALLOWED_ORIGINS`, else `auth.forbidden`."
+            },
+            "required": false,
+            "description": "Client type `browser`: required, and exactly one of `SESSION_ALLOWED_ORIGINS`, else `auth.forbidden`.",
+            "name": "origin",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Client type `browser`: when present it must be `same-origin`."
+            },
+            "required": false,
+            "description": "Client type `browser`: when present it must be `same-origin`.",
+            "name": "sec-fetch-site",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Client type `browser`: the refresh token, set by the sign-in, sign-up and refresh responses (`tula_refresh`, unprefixed and without `Secure`, when `SESSION_COOKIE_INSECURE=true` in local development)."
+            },
+            "required": false,
+            "description": "Client type `browser`: the refresh token, set by the sign-in, sign-up and refresh responses (`tula_refresh`, unprefixed and without `Secure`, when `SESSION_COOKIE_INSECURE=true` in local development).",
+            "name": "__Secure-tula_refresh",
+            "in": "cookie"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -3199,7 +3450,17 @@
         },
         "responses": {
           "204": {
-            "description": "Signed out."
+            "description": "Signed out.",
+            "headers": {
+              "set-cookie": {
+                "schema": {
+                  "type": "string",
+                  "description": "Client type `browser`: `__Secure-tula_refresh=<token>; Path=/v1/client/sessions/; Max-Age=<remaining absolute lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`. Sign-out sends the same name, path and attributes with an empty value and `Max-Age=0`."
+                },
+                "required": false,
+                "description": "Client type `browser`: `__Secure-tula_refresh=<token>; Path=/v1/client/sessions/; Max-Age=<remaining absolute lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`. Sign-out sends the same name, path and attributes with an empty value and `Max-Age=0`."
+              }
+            }
           },
           "400": {
             "description": "`request.invalid`: The request is not valid.",
@@ -3211,6 +3472,49 @@
                       "error": {
                         "code": "request.invalid",
                         "message": "The request is not valid."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": ["code", "message"]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`auth.forbidden`: You are not allowed to do this.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "auth.forbidden": {
+                    "value": {
+                      "error": {
+                        "code": "auth.forbidden",
+                        "message": "You are not allowed to do this."
                       }
                     }
                   }

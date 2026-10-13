@@ -21,6 +21,9 @@ export const ATTEMPT_SECRET_PREFIX = 'tula_at_'
 /** The kinds of client that hold a session. */
 export const clientSchema = z.enum(['web', 'ios', 'android', 'server'])
 
+/** The values of the client header: a session client, or `browser` (the refresh-cookie flow). */
+export const clientHeaderSchema = z.enum(['web', 'ios', 'android', 'server', 'browser'])
+
 /** A high surrogate with no low one after it, or a low one with no high one before it. */
 const UNPAIRED_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/
 
@@ -103,6 +106,19 @@ export const sessionTokensSchema = z
   })
   .openapi('SessionTokens')
 
+/**
+ * The tokens of a signed-in session for the `browser` client type: the refresh token is not here,
+ * it is in the `Set-Cookie` header. Strict, so it is exclusive with {@link sessionTokensSchema}.
+ */
+export const browserSessionTokensSchema = z
+  .strictObject({
+    sessionId: z.string(),
+    accessToken: z.string(),
+    accessTokenExpiresAt: z.iso.datetime(),
+    organization: z.object({ id: z.string(), role: roleSchema }),
+  })
+  .openapi('BrowserSessionTokens')
+
 /** Where an attempt stands and what it needs next. */
 export const stepSchema = z
   .object({
@@ -128,6 +144,12 @@ export const flowResponseSchema = z
     session: sessionTokensSchema.optional(),
   })
   .openapi('FlowResponse')
+
+/** The answer to a step for the `browser` client type: the session has no refresh token. */
+export const browserFlowResponseSchema = flowResponseSchema
+  .omit({ session: true })
+  .extend({ session: browserSessionTokensSchema.optional() })
+  .openapi('BrowserFlowResponse')
 
 /** What a client may show about the password rules. */
 export const passwordPolicySchema = z
