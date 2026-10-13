@@ -793,10 +793,10 @@
               "set-cookie": {
                 "schema": {
                   "type": "string",
-                  "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`."
+                  "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`. A completed sign-in also sets the known-device cookie `__Secure-tula_known_device` (`tula_known_device` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sign-ins; Max-Age=7776000; HttpOnly; Secure; SameSite=Strict`, no `Domain`: a signed value that lets this device sign in to this account while others guess at its address."
                 },
                 "required": false,
-                "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`."
+                "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`. A completed sign-in also sets the known-device cookie `__Secure-tula_known_device` (`tula_known_device` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sign-ins; Max-Age=7776000; HttpOnly; Secure; SameSite=Strict`, no `Domain`: a signed value that lets this device sign in to this account while others guess at its address."
               }
             },
             "content": {
@@ -1218,10 +1218,10 @@
               "set-cookie": {
                 "schema": {
                   "type": "string",
-                  "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`."
+                  "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`. A completed sign-in also sets the known-device cookie `__Secure-tula_known_device` (`tula_known_device` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sign-ins; Max-Age=7776000; HttpOnly; Secure; SameSite=Strict`, no `Domain`: a signed value that lets this device sign in to this account while others guess at its address."
                 },
                 "required": false,
-                "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`."
+                "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`. A completed sign-in also sets the known-device cookie `__Secure-tula_known_device` (`tula_known_device` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sign-ins; Max-Age=7776000; HttpOnly; Secure; SameSite=Strict`, no `Domain`: a signed value that lets this device sign in to this account while others guess at its address."
               }
             },
             "content": {
@@ -1694,10 +1694,10 @@
               "set-cookie": {
                 "schema": {
                   "type": "string",
-                  "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`."
+                  "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`. A completed sign-in also sets the known-device cookie `__Secure-tula_known_device` (`tula_known_device` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sign-ins; Max-Age=7776000; HttpOnly; Secure; SameSite=Strict`, no `Domain`: a signed value that lets this device sign in to this account while others guess at its address."
                 },
                 "required": false,
-                "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`."
+                "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`. A completed sign-in also sets the known-device cookie `__Secure-tula_known_device` (`tula_known_device` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sign-ins; Max-Age=7776000; HttpOnly; Secure; SameSite=Strict`, no `Domain`: a signed value that lets this device sign in to this account while others guess at its address."
               }
             },
             "content": {
@@ -2054,10 +2054,10 @@
               "set-cookie": {
                 "schema": {
                   "type": "string",
-                  "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`."
+                  "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`. A completed sign-in also sets the known-device cookie `__Secure-tula_known_device` (`tula_known_device` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sign-ins; Max-Age=7776000; HttpOnly; Secure; SameSite=Strict`, no `Domain`: a signed value that lets this device sign in to this account while others guess at its address."
                 },
                 "required": false,
-                "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`."
+                "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`. A completed sign-in also sets the known-device cookie `__Secure-tula_known_device` (`tula_known_device` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sign-ins; Max-Age=7776000; HttpOnly; Secure; SameSite=Strict`, no `Domain`: a signed value that lets this device sign in to this account while others guess at its address."
               }
             },
             "content": {
@@ -2254,7 +2254,7 @@
       "post": {
         "tags": ["sign-in"],
         "summary": "Submit the password",
-        "description": "Completes the sign-in with tokens. An account with no Organization is refused with `auth.no_organization`, and one whose Organization was deleted with `organization.deleted`; neither gets a session. If the core service cannot answer, the answer is 503 `membership.unavailable` with `Retry-After`: nothing is counted against the account and the same attempt can be submitted again.",
+        "description": "Completes the sign-in with tokens. An account with no Organization is refused with `auth.no_organization`, and one whose Organization was deleted with `organization.deleted`; neither gets a session. Wrong passwords are counted per address (about 11, then one every 15 minutes) and refused with 429 `rate.limited` and `Retry-After`, except from a device that holds a valid known-device cookie for the account (set by an earlier sign-in), which has a counter of its own. If the core service cannot answer, the answer is 503 `membership.unavailable` with `Retry-After`: nothing is counted against the account and the same attempt can be submitted again.",
         "parameters": [
           {
             "schema": {
@@ -2302,10 +2302,10 @@
               "set-cookie": {
                 "schema": {
                   "type": "string",
-                  "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`."
+                  "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`. A completed sign-in also sets the known-device cookie `__Secure-tula_known_device` (`tula_known_device` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sign-ins; Max-Age=7776000; HttpOnly; Secure; SameSite=Strict`, no `Domain`: a signed value that lets this device sign in to this account while others guess at its address."
                 },
                 "required": false,
-                "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`."
+                "description": "Client type `browser`, on the response that completes the attempt only: the refresh cookie `__Secure-tula_refresh` (`tula_refresh` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`. A completed sign-in also sets the known-device cookie `__Secure-tula_known_device` (`tula_known_device` in local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sign-ins; Max-Age=7776000; HttpOnly; Secure; SameSite=Strict`, no `Domain`: a signed value that lets this device sign in to this account while others guess at its address."
               }
             },
             "content": {

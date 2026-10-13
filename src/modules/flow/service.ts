@@ -22,8 +22,14 @@ import { accountExistsEmail } from '~/modules/verification/mail'
 import * as Verification from '~/modules/verification/service'
 import type { Tenant } from '~/ports/fixed-project'
 import type { FlowAttemptRecord } from '~/ports/flow-attempt-store'
-import { CREDENTIAL_LOCKOUT, signInLockKey } from '~/ports/lockout'
+import {
+  CREDENTIAL_LOCKOUT,
+  KNOWN_DEVICE_LOCKOUT,
+  knownDeviceLockKey,
+  signInLockKey,
+} from '~/ports/lockout'
 import type { SessionClient } from '~/ports/session-store'
+import { type KnownDevice, newDeviceId, setDeviceCookie } from './device-cookie'
 import {
   ATTEMPT_SECRET_PREFIX,
   type FlowKind,
@@ -66,6 +72,11 @@ export type ClientContext = {
   client: SessionClient
   /** The `browser` client type: the refresh token goes in a cookie, not the body. */
   cookie?: boolean
+  /**
+   * The device the request's known-device cookie vouches for (ADR 0014), or `null`: a missing,
+   * tampered, expired or malformed cookie is `null`. Read when called, so only a sign-in pays.
+   */
+  knownDevice?: () => KnownDevice | null
   /** Reports a failure that is the deployment's to fix (e.g. an account with no Organization). */
   report: (error: unknown, status: number) => void
 }
@@ -87,6 +98,11 @@ export type FlowResult = {
   }
   attemptSecret?: string
   session?: Sessions.IssuedSession
+  /**
+   * The `Set-Cookie` value that marks the device as known, on a `browser` sign-in that succeeded.
+   * The router sets it as a header and removes it from the body.
+   */
+  deviceCookie?: string
 }
 
 function stepFor(attempt: FlowAttemptRecord, state: State): FlowResult['step'] {
@@ -613,7 +629,9 @@ export async function signIn(
  * Every failure is the same `auth.invalid_credentials`: unknown address, wrong password. An
  * unknown address still costs one password verification. A ban is revealed only to someone who
  * knows the password. Failures back off per identifier (`CREDENTIAL_LOCKOUT`), so the lockout
- * follows the account across attempts; a success clears it.
+ * follows the account across attempts; a success clears it. A device that has signed in to the
+ * account before is not refused for other people's wrong tries (ADR 0014), but its own are
+ * counted separately.
  *
  * A user with no Organization cannot sign in: no session is created and no token issued, and the
  * deployment is told so it can repair the account.
@@ -638,17 +656,44 @@ export async function submitPassword(
   // front and cleared on success, so parallel guesses cannot all slip through. It happens before
   // the lookup, so unknown identifiers lock out exactly the same, and an unknown identifier still
   // pays for one verification in the same lane.
+  //
+  // Known devices (ADR 0014): an address locked by wrong tries refuses every device but one that
+  // carries a valid cookie for the account that address belongs to. That device is not refused
+  // for the address's lockout, but its own wrong tries count against a counter of its own
+  // (account and device), so a copied cookie cannot guess without limit. Any other cookie
+  // (missing, tampered, expired, for another account) is treated as no cookie, with the same
+  // answer. A locked address costs a request with no valid cookie nothing beyond the counter.
   const lockKey = signInLockKey(tenant.environmentId, attempt.identifier)
-  const user = await Passwords.inLane(deps, 'signIn', async () => {
-    const lock = await deps.lockout.attempt(lockKey, CREDENTIAL_LOCKOUT, deps.clock.now())
-    if (!lock.allowed) {
-      throw rateLimited(ERRORS['rate.limited'], lock.retryAfterMs)
+  const cookieDevice = context.knownDevice?.() ?? null
+  const { user, device } = await Passwords.inLane(deps, 'signIn', async () => {
+    const address = await deps.lockout.attempt(lockKey, CREDENTIAL_LOCKOUT, deps.clock.now())
+    if (!address.allowed && cookieDevice === null) {
+      throw rateLimited(ERRORS['rate.limited'], address.retryAfterMs)
     }
     const found = await deps.users.findByEmailWithPassword(tenant.environmentId, attempt.identifier)
+    const known = found && found.user.id === cookieDevice?.userId ? cookieDevice : null
+    if (!address.allowed && known === null) {
+      throw rateLimited(ERRORS['rate.limited'], address.retryAfterMs)
+    }
+    const deviceKey =
+      known === null ? null : knownDeviceLockKey(tenant.environmentId, known.userId, known.deviceId)
+    if (deviceKey !== null) {
+      const own = await deps.lockout.attempt(deviceKey, KNOWN_DEVICE_LOCKOUT, deps.clock.now())
+      if (!own.allowed) {
+        throw rateLimited(ERRORS['rate.limited'], own.retryAfterMs)
+      }
+    }
     if (!(await Passwords.verifyHeld(found?.passwordHash ?? null, input.password)) || !found) {
       throw fail(AUTH_ERRORS['auth.invalid_credentials'])
     }
-    await deps.lockout.clear(lockKey)
+    // A right password forgets what this device and (unless the address was locked by other
+    // people's guesses, which a success from a known device does not end) the address counted.
+    if (deviceKey !== null) {
+      await deps.lockout.clear(deviceKey)
+    }
+    if (address.allowed) {
+      await deps.lockout.clear(lockKey)
+    }
     if (found.user.bannedAt !== null) {
       throw fail(AUTH_ERRORS['auth.user_banned'])
     }
@@ -662,7 +707,7 @@ export async function submitPassword(
         deps.clock.now()
       )
     }
-    return found.user
+    return { user: found.user, device: known }
   })
 
   // Before the attempt is spent and before any session: no Organization, no tokens.
@@ -697,5 +742,16 @@ export async function submitPassword(
     expiresAt: attempt.expiresAt.toISOString(),
     step: { status: 'complete', userId: formatId('usr', user.id), sessionId: session.sessionId },
     session,
+    // A browser remembers the device (renewing the cookie it already had); other clients have
+    // no cookie jar to hold it.
+    ...(context.cookie
+      ? {
+          deviceCookie: setDeviceCookie(
+            deps.env,
+            { userId: user.id, deviceId: device?.deviceId ?? newDeviceId() },
+            now
+          ),
+        }
+      : {}),
   }
 }

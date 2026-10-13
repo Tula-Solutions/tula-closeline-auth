@@ -51,13 +51,13 @@ describe('purging expired sign-in data', () => {
       tenant
     )
 
-    expect(result).toEqual({ attempts: 12, tokens: 7 })
+    expect(result).toEqual({ attempts: 12, tokens: 7, counters: 0 })
     // A full batch means "again"; the first short one ends the loop.
     expect(attempts.removed).toEqual([5, 5, 2])
     expect(tokens.removed).toEqual([5, 2])
     expect(await deps.flowAttempts.findById(tenant.environmentId, live ?? '')).not.toBeNull()
     const again = await Retention.purgeExpired(deps, tenant)
-    expect(again).toEqual({ attempts: 0, tokens: 0 })
+    expect(again).toEqual({ attempts: 0, tokens: 0, counters: 0 })
   })
 
   test('an exact multiple of the limit takes one more, empty, statement to be sure', async () => {
@@ -113,6 +113,39 @@ describe('what a purge leaves for a sign-up still finishing', () => {
   })
 })
 
+describe('purging expired counters', () => {
+  test('takes bounded batches until one comes back short, with the batch size of the other purges', async () => {
+    const { deps, tenant } = await setup()
+    const asked: number[] = []
+    const answers = [5, 5, 2]
+    const counterPurger = {
+      deleteExpired: async (limit: number) => {
+        asked.push(limit)
+        return answers.shift() ?? 0
+      },
+    }
+
+    const result = await Retention.purgeExpired({ ...deps, counterPurger }, tenant)
+
+    expect(result).toEqual({ attempts: 0, tokens: 0, counters: 12 })
+    expect(asked).toEqual([5, 5, 5])
+  })
+
+  test('a run logs that counters were purged and a failing purge is reported, not thrown', async () => {
+    const { deps, tenant } = await setup()
+    const failing = {
+      deleteExpired: async () => {
+        throw new Error('database gone')
+      },
+    }
+
+    const outcome = await Retention.runOnce({ ...deps, counterPurger: failing }, tenant)
+
+    expect(outcome).toBe('failed')
+    expect(deps.reported).toHaveLength(1)
+  })
+})
+
 describe('a run', () => {
   test('purges under the shared lock', async () => {
     const { deps, tenant, seed } = await setup()
@@ -120,7 +153,11 @@ describe('a run', () => {
 
     expect(await Retention.runOnce(deps, tenant)).toBe('purged')
 
-    expect(await Retention.purgeExpired(deps, tenant)).toEqual({ attempts: 0, tokens: 0 })
+    expect(await Retention.purgeExpired(deps, tenant)).toEqual({
+      attempts: 0,
+      tokens: 0,
+      counters: 0,
+    })
   })
 
   test('is skipped, touching nothing, while another instance holds the lock', async () => {
@@ -133,7 +170,11 @@ describe('a run', () => {
     })
 
     expect(outcome).toBe('skipped')
-    expect(await Retention.purgeExpired(deps, tenant)).toEqual({ attempts: 3, tokens: 0 })
+    expect(await Retention.purgeExpired(deps, tenant)).toEqual({
+      attempts: 3,
+      tokens: 0,
+      counters: 0,
+    })
   })
 
   test('gives up after its timeout instead of hanging, and says so', async () => {

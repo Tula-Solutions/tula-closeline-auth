@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import {
   allowedOrigins,
+  counterHashKey,
   databaseUrl,
+  deviceCookieKey,
+  LOCAL_COUNTER_HASH_KEY,
+  LOCAL_DEVICE_COOKIE_KEY,
   LOCAL_MASTER_KEY,
   loadEnv,
   masterKey,
@@ -105,6 +109,8 @@ const DEPLOYED = {
   CORE_BASE_URL: 'https://core.eu.internal.example.com',
   CORE_INTERNAL_TOKEN: 'c'.repeat(32),
   SESSION_ALLOWED_ORIGINS: 'https://app.example.com',
+  COUNTER_HASH_KEY: 'h'.repeat(40),
+  DEVICE_COOKIE_KEY: 'd'.repeat(40),
 }
 
 test('a deploy outside local boots with everything set', () => {
@@ -328,6 +334,8 @@ describe('the browser session settings', () => {
     CORE_BASE_URL: 'https://core.example.com',
     CORE_INTERNAL_TOKEN: 'x'.repeat(40),
     SESSION_ALLOWED_ORIGINS: 'https://app.example.com',
+    COUNTER_HASH_KEY: 'h'.repeat(40),
+    DEVICE_COOKIE_KEY: 'd'.repeat(40),
   }
 
   test('both are unset by default: secure cookie, and no origin is allowed', () => {
@@ -473,3 +481,125 @@ function envSchemaIssues(source: Record<string, string | undefined>): string {
   }
   return ''
 }
+
+describe('the counter hash key and the known-device cookie key', () => {
+  const { COUNTER_HASH_KEY, DEVICE_COOKIE_KEY, ...withoutKeys } = {
+    ...DEPLOYED,
+    COUNTER_HASH_KEY: 'h'.repeat(40),
+    DEVICE_COOKIE_KEY: 'd'.repeat(40),
+  }
+
+  test.each(['dev', 'staging', 'prod'])(
+    'both are required in %s, and the message names them',
+    (environment) => {
+      const message = (() => {
+        try {
+          loadEnv({ ...withoutKeys, ENVIRONMENT: environment })
+          return ''
+        } catch (error) {
+          return String(error)
+        }
+      })()
+
+      expect(message).toContain('COUNTER_HASH_KEY is required outside local')
+      expect(message).toContain('DEVICE_COOKIE_KEY is required outside local')
+    }
+  )
+
+  test.each([
+    ['COUNTER_HASH_KEY', { COUNTER_HASH_KEY }],
+    ['DEVICE_COOKIE_KEY', { DEVICE_COOKIE_KEY }],
+  ])('a deploy with only %s still fails at boot', (_name, only) => {
+    expect(() => loadEnv({ ...withoutKeys, ...only })).toThrow(/is required outside local/)
+  })
+
+  test('a deploy with both boots, and the settings are the ones given', () => {
+    const env = loadEnv({ ...withoutKeys, COUNTER_HASH_KEY, DEVICE_COOKIE_KEY })
+
+    expect(counterHashKey(env)).toBe(COUNTER_HASH_KEY)
+    expect(deviceCookieKey(env)).toBe(DEVICE_COOKIE_KEY)
+  })
+
+  test.each([
+    ['too short', 'short'],
+    ['31 characters', 'x'.repeat(31)],
+    ['longer than 512', 'x'.repeat(513)],
+    ['with a space', `${'x'.repeat(40)} y`],
+    ['empty', ''],
+  ])('a key that is %s is refused, in local too', (_name, value) => {
+    for (const key of ['COUNTER_HASH_KEY', 'DEVICE_COOKIE_KEY']) {
+      expect(() => loadEnv({ ENVIRONMENT: 'local', REGION: 'us', [key]: value })).toThrow(
+        new RegExp(key)
+      )
+    }
+  })
+
+  test('the two keys must differ', () => {
+    expect(() =>
+      loadEnv({ ...withoutKeys, COUNTER_HASH_KEY, DEVICE_COOKIE_KEY: COUNTER_HASH_KEY })
+    ).toThrow(/DEVICE_COOKIE_KEY must differ/)
+  })
+
+  test('the message never carries the value', () => {
+    const secret = 'secret-value-that-is-too-short'
+    let message = ''
+    try {
+      loadEnv({ ENVIRONMENT: 'local', REGION: 'us', COUNTER_HASH_KEY: secret.slice(0, 20) })
+    } catch (error) {
+      message = String(error)
+    }
+
+    expect(message).toContain('COUNTER_HASH_KEY')
+    expect(message).not.toContain(secret.slice(0, 20))
+  })
+
+  test('local falls back to fixed development keys that differ from each other, and nowhere else', () => {
+    const env = loadEnv({ ENVIRONMENT: 'local', REGION: 'us' })
+
+    expect(counterHashKey(env)).toBe(LOCAL_COUNTER_HASH_KEY)
+    expect(deviceCookieKey(env)).toBe(LOCAL_DEVICE_COOKIE_KEY)
+    expect(LOCAL_COUNTER_HASH_KEY).not.toBe(LOCAL_DEVICE_COOKIE_KEY)
+    expect(LOCAL_COUNTER_HASH_KEY.length).toBeGreaterThanOrEqual(32)
+    expect(() => loadEnv({ ...withoutKeys })).toThrow()
+  })
+})
+
+describe('the published development keys', () => {
+  const deployed = {
+    ...DEPLOYED,
+    COUNTER_HASH_KEY: 'h'.repeat(40),
+    DEVICE_COOKIE_KEY: 'd'.repeat(40),
+  }
+
+  test.each([
+    ['AUTH_MASTER_KEY', LOCAL_MASTER_KEY],
+    ['AUTH_MASTER_KEY', LOCAL_MASTER_KEY.toUpperCase()],
+    ['COUNTER_HASH_KEY', LOCAL_COUNTER_HASH_KEY],
+    ['DEVICE_COOKIE_KEY', LOCAL_DEVICE_COOKIE_KEY],
+  ])(
+    '%s equal to its local default fails to load in prod, naming the setting only',
+    (key, value) => {
+      let message = ''
+      try {
+        loadEnv({ ...deployed, [key]: value })
+      } catch (error) {
+        message = String(error)
+      }
+
+      expect(message).toContain(`${key} must not be the published development key`)
+      expect(message).not.toContain(value)
+    }
+  )
+
+  test('the same values are accepted in local', () => {
+    expect(() =>
+      loadEnv({
+        ENVIRONMENT: 'local',
+        REGION: 'us',
+        AUTH_MASTER_KEY: LOCAL_MASTER_KEY,
+        COUNTER_HASH_KEY: LOCAL_COUNTER_HASH_KEY,
+        DEVICE_COOKIE_KEY: LOCAL_DEVICE_COOKIE_KEY,
+      })
+    ).not.toThrow()
+  })
+})

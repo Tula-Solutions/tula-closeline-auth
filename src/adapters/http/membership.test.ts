@@ -898,7 +898,7 @@ describe('abandoning an Organization', () => {
     expect(error).not.toBeInstanceOf(MembershipUnavailable)
   })
 
-  test('503 is busy, whatever Retry-After it carries (the kit client does not return headers)', async () => {
+  test('503 is busy and carries the whole-second Retry-After, uncapped; any other form is none', async () => {
     const { core, adapter } = connect()
     const input = () => ({
       organizationId: organizationId(),
@@ -915,12 +915,13 @@ describe('abandoning an Organization', () => {
     const huge = await adapter.abandonOrganization(input()).catch((e: unknown) => e)
     const junk = await adapter.abandonOrganization(input()).catch((e: unknown) => e)
 
-    // KNOWN GAP: kit v0.5.0's `request` returns no headers, so core's `Retry-After` is lost and the
-    // abandon loop paces itself. Restore `retryAfterMs: 2_000 / 5_000` when the kit returns it.
+    // The adapter passes core's number on; the abandon loop caps the pause (`ABANDON_MAX_PAUSE_MS`).
     for (const outcome of [asked, huge, junk]) {
       expect(outcome).toBeInstanceOf(MembershipBusy)
-      expect(outcome).toMatchObject({ retryAfterMs: undefined })
     }
+    expect(asked).toMatchObject({ retryAfterMs: 2_000 })
+    expect(huge).toMatchObject({ retryAfterMs: 9_999_000 })
+    expect(junk).toMatchObject({ retryAfterMs: undefined })
     expect(core.requests).toHaveLength(3)
   })
 

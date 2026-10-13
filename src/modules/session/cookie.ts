@@ -43,12 +43,14 @@ export function clearRefreshCookie(env: Env): string {
   return `${refreshCookieName(env)}=; ${attributes(env, 0)}`
 }
 
-/** The refresh token in a request's `Cookie` header, or `undefined`. Other cookies are ignored. */
-export function readRefreshCookie(env: Env, header: string | undefined): string | undefined {
+/**
+ * The value of the cookie `name` in a request's `Cookie` header, or `undefined` when it is absent
+ * or empty. Other cookies are ignored.
+ */
+export function readCookie(header: string | undefined, name: string): string | undefined {
   if (header === undefined) {
     return undefined
   }
-  const name = refreshCookieName(env)
   for (const part of header.split(';')) {
     const at = part.indexOf('=')
     if (at !== -1 && part.slice(0, at).trim() === name) {
@@ -57,6 +59,11 @@ export function readRefreshCookie(env: Env, header: string | undefined): string 
     }
   }
   return undefined
+}
+
+/** The refresh token in a request's `Cookie` header, or `undefined`. Other cookies are ignored. */
+export function readRefreshCookie(env: Env, header: string | undefined): string | undefined {
+  return readCookie(header, refreshCookieName(env))
 }
 
 /**

@@ -147,7 +147,7 @@ class AttemptFailed extends MembershipUnavailable {
 /**
  * What an exchange with core produced: the status and the JSON body when it was a usable one.
  */
-type Answer = { status: number; json: unknown }
+type Answer = { status: number; json: unknown; retryAfterMs?: number }
 
 /** Resolves after `ms`, or rejects as an aborted call when `signal` aborts first. */
 function pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
@@ -227,7 +227,11 @@ export function createHttpMembership(options: HttpMembershipOptions): Membership
       })
       // Only an answer that can be used is read: a 5xx or an odd status is not.
       const readable = response.status === 200 || (response.status >= 400 && response.status < 500)
-      return { status: response.status, json: readable ? boundedJson(response.json) : undefined }
+      return {
+        status: response.status,
+        json: readable ? boundedJson(response.json) : undefined,
+        ...(response.retryAfterMs === undefined ? {} : { retryAfterMs: response.retryAfterMs }),
+      }
     } catch (error) {
       if (callerSignal?.aborted) {
         throw new AttemptFailed('the call was aborted', false)
@@ -419,9 +423,9 @@ export function createHttpMembership(options: HttpMembershipOptions): Membership
         signal
       )
       if (answer.status === 503) {
-        // The kit's client does not hand back headers, so core's `Retry-After` is not known here;
-        // the abandon loop uses its own pause.
-        throw new MembershipBusy(undefined, 'core answered HTTP 503')
+        // Core's `Retry-After`, when it sent whole seconds. The abandon loop takes the longer of
+        // it and its own jittered pause, and caps the result (`ABANDON_MAX_PAUSE_MS`).
+        throw new MembershipBusy(answer.retryAfterMs, 'core answered HTTP 503')
       }
       if (answer.status !== 200) {
         try {

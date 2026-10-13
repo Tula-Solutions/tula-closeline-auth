@@ -1,5 +1,6 @@
 import { createFixedClock, createLogger, type FixedClock } from 'tula-closeline-kit'
 import { MemoryBreachChecker } from '~/adapters/memory/breach-checker'
+import { createMemoryCounterPurger } from '~/adapters/memory/counter-purger'
 import { createMemoryExclusiveRunner } from '~/adapters/memory/exclusive-runner'
 import { createMemoryFixedProject } from '~/adapters/memory/fixed-project'
 import { MemoryFlowAttemptStore } from '~/adapters/memory/flow-attempts'
@@ -54,6 +55,8 @@ export function createTestDeps(
     LOG_LEVEL: 'debug',
     DATABASE_URL: 'postgres://closeline_auth:unused@127.0.0.1:1/closeline',
     AUTH_MASTER_KEY: 'ab'.repeat(32),
+    COUNTER_HASH_KEY: 'h'.repeat(40),
+    DEVICE_COOKIE_KEY: 'd'.repeat(40),
     PUBLIC_URL: 'https://auth.test.example.com',
     CORE_BASE_URL: 'https://core.test.example.com',
     CORE_INTERNAL_TOKEN: 'test-core-token-0123456789abcdef-test',
@@ -89,6 +92,7 @@ export function createTestDeps(
     mailer: new MemoryMailer(),
     rateLimiter: new MemoryRateLimiter(clock),
     lockout: new MemoryLockout(clock),
+    counterPurger: createMemoryCounterPurger(),
     exclusive: createMemoryExclusiveRunner(),
     limits: createWorkLimits(env),
     breachChecker: new MemoryBreachChecker(overrides.breached),

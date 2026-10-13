@@ -34,6 +34,15 @@ export const CREDENTIAL_LOCKOUT: LockoutPolicy = {
 }
 
 /**
+ * Lockout for wrong passwords from a device that has signed in to the account before (ADR 0014),
+ * counted per account and device, never per address. Same schedule as {@link CREDENTIAL_LOCKOUT}:
+ * 5 free tries (a person on their own device mistypes), then 30s doubling to 15 minutes, forgotten
+ * after an hour of quiet. A copied or stolen cookie therefore gets about as many guesses as an
+ * unknown device does, on top of what the address allowed, and no more.
+ */
+export const KNOWN_DEVICE_LOCKOUT: LockoutPolicy = { ...CREDENTIAL_LOCKOUT }
+
+/**
  * The wait a failure imposes under a policy.
  *
  * Shared by every adapter so they agree on the schedule.
@@ -55,8 +64,8 @@ export function lockoutDelayMs(policy: LockoutPolicy, failures: number): number 
  * Exponential backoff for attempts at guessing a secret (a password), keyed by what is being
  * attacked (an identifier or a user), not by who is asking.
  *
- * In process memory for one instance, in Redis when several share the count (ADR 0016). An
- * adapter whose storage is unreachable throws `service.unavailable`: an attempt is never
+ * In Postgres, so every instance shares the count (ADR 0014); in process memory for tests. An
+ * adapter whose storage is unreachable throws: an attempt is never
  * allowed uncounted.
  */
 export interface Lockout {
@@ -83,8 +92,8 @@ export interface Lockout {
 /**
  * The lockout key for password sign-in of one identifier in one environment.
  *
- * The identifier is hashed so that lockout storage (process memory or Redis) holds no email
- * address.
+ * The identifier is hashed so that lockout storage (process memory or Postgres, where the key
+ * is HMACed again with `COUNTER_HASH_KEY`) holds no email address.
  *
  * @param environmentId - The environment.
  * @param identifier - The normalized identifier (email) being signed in to.
@@ -92,4 +101,21 @@ export interface Lockout {
  */
 export function signInLockKey(environmentId: string, identifier: string): string {
   return `sign_in:${environmentId}:${sha256Hex(identifier)}`
+}
+
+/**
+ * The lockout key for wrong passwords from one known device of one account (ADR 0014). The user
+ * id and the device id are both inside the signed cookie, so a device cannot pick another key.
+ *
+ * @param environmentId - The environment.
+ * @param userId - The account the device is known to (the bare uuid).
+ * @param deviceId - The device's random id from its cookie.
+ * @returns The key to pass to {@link Lockout.attempt} and {@link Lockout.clear}.
+ */
+export function knownDeviceLockKey(
+  environmentId: string,
+  userId: string,
+  deviceId: string
+): string {
+  return `known_device:${environmentId}:${userId}:${deviceId}`
 }

@@ -43,6 +43,16 @@ function isExactOrigin(entry: string, allowHttp: boolean): boolean {
   return schemeOk && url.origin === entry
 }
 
+/** A secret key setting: 32 to 512 printable characters, optional here and required later. */
+function counterSecret(name: string) {
+  return z
+    .string()
+    .min(32, `${name} must be at least 32 characters`)
+    .max(512, `${name} must be at most 512 characters`)
+    .regex(/^[\x21-\x7e]+$/, `${name} must be printable characters with no spaces`)
+    .optional()
+}
+
 const schema = z
   .object({
     /** Which deployment this is. No default: a deploy that forgets it must fail at boot. */
@@ -162,6 +172,21 @@ const schema = z
      * request is refused.
      */
     SESSION_ALLOWED_ORIGINS: z.string().optional(),
+    /**
+     * The key of the HMAC-SHA-256 that turns a sign-in or rate-limit key (an address, never
+     * stored) into the hash the counters table holds: 32 to 512 printable characters. Required
+     * outside `local`, where a fixed development key is used. Never logged. Rotating it orphans
+     * every existing counter, which then expires: the guessing budget of every address restarts
+     * once.
+     */
+    COUNTER_HASH_KEY: counterSecret('COUNTER_HASH_KEY'),
+    /**
+     * The key that signs the known-device cookie (ADR 0014): 32 to 512 printable characters,
+     * different from `COUNTER_HASH_KEY`. Required outside `local`, where a fixed development key
+     * is used. Never logged. Rotating it makes every known-device cookie unverifiable, so every
+     * device is unknown until it signs in again.
+     */
+    DEVICE_COOKIE_KEY: counterSecret('DEVICE_COOKIE_KEY'),
   })
   .superRefine((env, ctx) => {
     // Messages name the key and the rule, never the value: a URL can carry credentials.
@@ -227,10 +252,34 @@ const schema = z
       'CORE_BASE_URL',
       'CORE_INTERNAL_TOKEN',
       'SESSION_ALLOWED_ORIGINS',
+      'COUNTER_HASH_KEY',
+      'DEVICE_COOKIE_KEY',
     ] as const) {
       if (env[key] === undefined) {
         ctx.addIssue({ code: 'custom', path: [key], message: `${key} is required outside local` })
       }
+    }
+    // The published development keys protect nothing: a deployment must not run on them. The
+    // messages name the setting only, never the value.
+    for (const [key, published] of [
+      ['AUTH_MASTER_KEY', LOCAL_MASTER_KEY],
+      ['COUNTER_HASH_KEY', LOCAL_COUNTER_HASH_KEY],
+      ['DEVICE_COOKIE_KEY', LOCAL_DEVICE_COOKIE_KEY],
+    ] as const) {
+      if (env[key]?.toLowerCase() === published) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [key],
+          message: `${key} must not be the published development key outside local`,
+        })
+      }
+    }
+    if (env.COUNTER_HASH_KEY !== undefined && env.COUNTER_HASH_KEY === env.DEVICE_COOKIE_KEY) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['DEVICE_COOKIE_KEY'],
+        message: 'DEVICE_COOKIE_KEY must differ from COUNTER_HASH_KEY',
+      })
     }
     if (
       env.CORE_BASE_URL !== undefined &&
@@ -263,6 +312,12 @@ export type Env = z.infer<typeof schema>
  */
 export const LOCAL_MASTER_KEY = '00112233445566778899aabbccddeeff'.repeat(2)
 
+/** The counter hash key of the `local` environment only; `loadEnv` refuses it anywhere else. */
+export const LOCAL_COUNTER_HASH_KEY = 'local-counter-hash-key-not-a-secret-0001'
+
+/** The known-device cookie key of the `local` environment only; refused anywhere else. */
+export const LOCAL_DEVICE_COOKIE_KEY = 'local-device-cookie-key-not-a-secret-0002'
+
 /** The compose database's `closeline_auth` login, for `local` and the integration tests. */
 export function localDatabaseUrl(source: Record<string, string | undefined> = process.env): string {
   return `postgres://closeline_auth:closeline_auth_local@127.0.0.1:${source.POSTGRES_PORT || '5432'}/closeline`
@@ -284,6 +339,16 @@ export function databaseUrl(
 /** The master key in force: the configured one, or the development key in `local`. */
 export function masterKey(env: Env): string {
   return env.AUTH_MASTER_KEY ?? LOCAL_MASTER_KEY
+}
+
+/** The counter hash key in force: the configured one, or the development key in `local`. */
+export function counterHashKey(env: Env): string {
+  return env.COUNTER_HASH_KEY ?? LOCAL_COUNTER_HASH_KEY
+}
+
+/** The known-device cookie key in force: the configured one, or the development key in `local`. */
+export function deviceCookieKey(env: Env): string {
+  return env.DEVICE_COOKIE_KEY ?? LOCAL_DEVICE_COOKIE_KEY
 }
 
 /** The issuer of every token: the configured URL, or this machine's address in `local`. */

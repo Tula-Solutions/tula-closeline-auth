@@ -74,8 +74,8 @@ secret travels in `x-tula-attempt`; the client kind in `x-tula-client`.
 `x-tula-client: browser` (stored as session client `web`) gets the refresh token in the cookie
 `__Secure-tula_refresh` (HttpOnly, Secure, SameSite=Strict, `Path=/v1/client/sessions/`), never in
 the body; refresh and sign-out read only the cookie, after an `Origin` allow-list check. Every
-other client type is unchanged. Rules: `.claude/rules/session.md`. The known-device cookie waits for
-the lockout change (hub issue 30), where its verification lives.
+other client type is unchanged. Rules: `.claude/rules/session.md`. The known-device cookie (a separate cookie, set and verified
+at sign-in) is in `.claude/rules/lockout.md`.
 
 ## Accounts and Organizations
 
@@ -95,9 +95,7 @@ no `Retry-After`, reported once per attempt, the try stays spent. Calls to core 
 (`CORE_CONCURRENCY`, `CORE_QUEUE`); past the cap a call is 503 at once. They go through the kit's
 `createInternalClient` (ADR 0013), never `fetch`, so no proxy variable can reroute them, and the
 service refuses to boot with `NODE_TLS_REJECT_UNAUTHORIZED=0` outside `local`; the adapter owns
-retrying (the client is built with one attempt). Known gap: the client returns no headers, so
-an abandon 503 no longer carries core's `Retry-After` (the abandon loop paces itself) until kit
-returns it.
+retrying (the client is built with one attempt). On an abandon 503 the adapter passes core's `Retry-After` (kit `retryAfterMs`) on and the abandon loop caps the pause at 1 s.
 
 Sign-up safety: the user id and the idempotency key `signup:<attempt id>` are fixed when the
 attempt starts, and `verify-email` holds no database transaction across the call to core. Order:
@@ -112,7 +110,7 @@ submit would lose a working Organization), so that abandon waits for a sweep, wh
 `.claude/rules/membership.md`.
 
 ## Retention
-The purge of expired attempts and codes (`modules/retention`): `.claude/rules/retention.md`. Sessions, refresh tokens and signing keys are not purged yet.
+The purge of expired attempts, codes and lockout counters (`modules/retention`): `.claude/rules/retention.md`. Sessions, refresh tokens and signing keys are not purged yet.
 
 ## Env keys (`src/env.ts`, mirrored in `.env.example`)
 
@@ -126,7 +124,9 @@ and `CORE_INTERNAL_TOKEN` (32+ characters, never logged) (all five required outs
 `HASH_QUEUE`, `SIGN_IN_CONCURRENCY`, `SIGN_IN_QUEUE`, `BREACH_CHECK_CONCURRENCY`,
 `BREACH_CHECK_QUEUE`, `MAIL_LOCAL_URL`, `MAIL_LOCAL_FROM` (local only), `SESSION_ALLOWED_ORIGINS` (exact, distinct origins,
 comma-separated, https outside `local`, no wildcard; required outside `local`),
-`SESSION_COOKIE_INSECURE` (`true` only in `local`). Add a key in both files.
+`SESSION_COOKIE_INSECURE` (`true` only in `local`), `COUNTER_HASH_KEY` and `DEVICE_COOKIE_KEY` (32 to
+512 printable characters each, different, required outside `local`, never logged; rotation:
+`.claude/rules/lockout.md`). Add a key in both files.
 
 ## Tests
 
@@ -138,23 +138,10 @@ scenarios against real Postgres as the `closeline_auth` role (`POSTGRES_PORT` mo
 
 ## Known gaps
 
-- **Deployment constraint: one instance until the counters move to Postgres.** Rate limits and
-  lockout are per-process memory (`MemoryRateLimiter`, `MemoryLockout`), so with N instances an
-  attacker gets N times the free guesses and sends, and every deploy or crash resets the counts.
-  This breaks "state lives in Postgres, the queue or the cache"; moving them needs a table in a
-  `tula-closeline-db` release (a separate ticket, hub issue 30). Until then both maps are capped
-  at 50,000 keys. At the cap an insert looks at the front of the map only (64 keys, so it costs a
-  bounded amount): the oldest key that is not locked or at its limit goes; a locked key is never
-  evicted, and if the keys looked at are all locked a new key is refused (fails closed) and they
-  move to the back: refusals of a new key are bounded by the locked keys divided by 64.
-- **Known limitations of the per-process cap (go away with hub issue 30; pinned by tests named
-  KNOWN LIMITATION).** Churn resets lockout: a key below its lockout is evicted after about 50,000
-  newer keys (5 guesses per roughly 100,000 cheap requests). Filling the cap with locked keys
-  (about 1,000 requests a second for 20 minutes) refuses sign-in for new addresses. The edge limit
-  (below) makes both expensive; sends are counted only after a hash slot is held.
-- **A stranger can lock a victim out of password sign-in.** Lockout is keyed by address and counted
-  up front, so about 11 wrong tries keep the correct password refused (429 `rate.limited`) until
-  an hour of quiet. Inherited; `flow.test.ts` pins it. A follow-up ticket decides the redesign.
+- **A stranger can lock a victim out of password sign-in from a new device.** Lockout is counted
+  per address (about 11 wrong tries, then one per 15 minutes), so a device with no known-device
+  cookie for the account is refused while it lasts; a device that has signed in before is not
+  (ADR 0014). Counters are in Postgres, shared by every instance: `.claude/rules/lockout.md`.
 - No production mail provider (hub issue #35): the mailer fails with `mail.unavailable`. Only in
   `local`, `MAIL_LOCAL_URL` selects a Mailpit mailbox adapter: `.claude/rules/mail.md`.
 - **Deployment prerequisite: a per-source rate limit at the edge.** The service has no per-IP
