@@ -104,6 +104,7 @@ const DEPLOYED = {
   PUBLIC_URL: 'https://auth.eu.example.com/',
   CORE_BASE_URL: 'https://core.eu.internal.example.com',
   CORE_INTERNAL_TOKEN: 'c'.repeat(32),
+  SESSION_ALLOWED_ORIGINS: 'https://app.example.com',
 }
 
 test('a deploy outside local boots with everything set', () => {
@@ -316,6 +317,7 @@ describe('the browser session settings', () => {
     PUBLIC_URL: 'https://auth.example.com',
     CORE_BASE_URL: 'https://core.example.com',
     CORE_INTERNAL_TOKEN: 'x'.repeat(40),
+    SESSION_ALLOWED_ORIGINS: 'https://app.example.com',
   }
 
   test('both are unset by default: secure cookie, and no origin is allowed', () => {
@@ -426,4 +428,28 @@ describe('the browser session settings', () => {
       /SESSION_ALLOWED_ORIGINS/
     )
   })
+
+  test('duplicate origins are refused', () => {
+    for (const value of [
+      'https://app.example.com,https://app.example.com',
+      'https://app.example.com, https://app.example.com',
+    ]) {
+      expect(() => loadEnv({ ...deployed, SESSION_ALLOWED_ORIGINS: value })).toThrow(
+        /SESSION_ALLOWED_ORIGINS/
+      )
+    }
+  })
+
+  test.each(['dev', 'staging', 'prod'])(
+    '%s refuses to boot with no allowed origin',
+    (environment) => {
+      const { SESSION_ALLOWED_ORIGINS: _unset, ...without } = deployed
+      expect(() => loadEnv({ ...without, ENVIRONMENT: environment })).toThrow(
+        /SESSION_ALLOWED_ORIGINS/
+      )
+      expect(() =>
+        loadEnv({ ...without, ENVIRONMENT: environment, SESSION_ALLOWED_ORIGINS: '' })
+      ).toThrow(/SESSION_ALLOWED_ORIGINS/)
+    }
+  )
 })

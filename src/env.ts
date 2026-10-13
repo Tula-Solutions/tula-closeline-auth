@@ -150,7 +150,8 @@ const schema = z
     /**
      * The origins the portal is served from: a comma-separated list of exact origins (at most
      * 20), `https` outside `local`, no wildcard, path or trailing slash. A browser-client
-     * refresh or sign-out must carry an `Origin` in this list. Unset: every such request is refused.
+     * refresh or sign-out must carry an `Origin` in this list. Required outside `local` (a deploy without it fails at boot); unset in `local`, every such
+     * request is refused.
      */
     SESSION_ALLOWED_ORIGINS: z.string().optional(),
   })
@@ -177,12 +178,13 @@ const schema = z
       const allowHttp = env.ENVIRONMENT === 'local'
       if (
         entries.length > MAX_ALLOWED_ORIGINS ||
+        new Set(entries).size !== entries.length ||
         !entries.every((entry) => isExactOrigin(entry, allowHttp))
       ) {
         ctx.addIssue({
           code: 'custom',
           path: ['SESSION_ALLOWED_ORIGINS'],
-          message: `SESSION_ALLOWED_ORIGINS must list at most ${MAX_ALLOWED_ORIGINS} exact origins, comma-separated, each like https://host[:port] with a lower-case host, no wildcard, path or trailing slash (http only when ENVIRONMENT is local)`,
+          message: `SESSION_ALLOWED_ORIGINS must list at most ${MAX_ALLOWED_ORIGINS} exact, distinct origins, comma-separated, each like https://host[:port] with a lower-case host, no wildcard, path or trailing slash (http only when ENVIRONMENT is local)`,
         })
       }
     }
@@ -216,6 +218,7 @@ const schema = z
       'PUBLIC_URL',
       'CORE_BASE_URL',
       'CORE_INTERNAL_TOKEN',
+      'SESSION_ALLOWED_ORIGINS',
     ] as const) {
       if (env[key] === undefined) {
         ctx.addIssue({ code: 'custom', path: [key], message: `${key} is required outside local` })
