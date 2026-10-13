@@ -21,22 +21,17 @@ Other scripts are in `package.json`.
 
 ## Where this came from
 
-Ported from the source product `tula-auth-and-user-management` (`apps/api`, `packages/contract`,
-`conformance/`), read only. Ticket 1.7 named commit `46d13ba`; it was ported from `55e32edc` (a
-descendant; the later commits touch only out-of-scope areas). Ported as-is
-(rename of `TULA_MASTER_KEY` to `AUTH_MASTER_KEY` only): secret box, keyed hash, crypto and email
-helpers, the password rule engine (cut to the four rules the fixed policy runs, so each of its
-codes is in the contract), lockout policy, flow-attempt, verification-code and refresh
-logic. Adapted: ids and tenancy (`withEnvironment`, one fixed project), errors (the contract's
-`area.reason` envelope), the sign-up (an Organization name or an invitation, see below).
+Ported from the source product `tula-auth-and-user-management` (read only; commit `55e32edc`,
+a descendant of the `46d13ba` ticket 1.7 named). Ported as-is (`TULA_MASTER_KEY` became
+`AUTH_MASTER_KEY`): secret box, keyed hash, crypto and email helpers, the four-rule password
+engine, lockout, flow-attempt, verification-code and refresh logic. Adapted: ids and tenancy, the
+contract's error envelope, the sign-up (an Organization name or an invitation).
 
-Left out, and what the in-scope flows will miss: OAuth, passkeys, MFA, SMS, webhooks, hooks,
-proposals, the admin API, native apps, API keys and the event outbox (so no `user.created` event
-yet); password reset and change; email change; session profiles, stateful cookie sessions, device
-binding and step-up (one hybrid session policy: access 60 s, idle 7 d, absolute 30 d); audit-log
-and activity writes; per-environment settings (the policy is fixed: 10 to 128 characters,
-common and breached passwords refused); resolving the environment by publishable key (the
-service serves the one tenant it bootstrapped).
+Left out: OAuth, passkeys, MFA, SMS, webhooks, hooks, the admin API, native apps, API keys, the
+event outbox (no `user.created` yet), password reset and change, email change, session profiles,
+device binding and step-up (one hybrid policy: access 60 s, idle 7 d, absolute 30 d), audit-log
+writes, per-environment settings (fixed policy: 10 to 128 characters, common and breached
+passwords refused) and lookup by publishable key (one bootstrapped tenant).
 
 ## Layout
 
@@ -97,7 +92,12 @@ verification try the code cost, so outages never use up a correct code). An outa
 warn, one line per failed request, and not reported; a rejected secret is reported once a minute
 per cause class (`src/http/errors.ts`). Core saying a new user already belongs to an Organization is a fault: 500,
 no `Retry-After`, reported once per attempt, the try stays spent. Calls to core are capped
-(`CORE_CONCURRENCY`, `CORE_QUEUE`); past the cap a call is 503 at once.
+(`CORE_CONCURRENCY`, `CORE_QUEUE`); past the cap a call is 503 at once. They go through the kit's
+`createInternalClient` (ADR 0013), never `fetch`, so no proxy variable can reroute them, and the
+service refuses to boot with `NODE_TLS_REJECT_UNAUTHORIZED=0` outside `local`; the adapter owns
+retrying (the client is built with one attempt). Known gap: the client returns no headers, so
+an abandon 503 no longer carries core's `Retry-After` (the abandon loop paces itself) until kit
+returns it.
 
 Sign-up safety: the user id and the idempotency key `signup:<attempt id>` are fixed when the
 attempt starts, and `verify-email` holds no database transaction across the call to core. Order:
@@ -112,9 +112,7 @@ submit would lose a working Organization), so that abandon waits for a sweep, wh
 `.claude/rules/membership.md`.
 
 ## Retention
-
-The purge of expired attempts and codes (`modules/retention`) and its rules: `.claude/rules/retention.md`.
-Sessions, refresh tokens and signing keys are not purged yet.
+The purge of expired attempts and codes (`modules/retention`): `.claude/rules/retention.md`. Sessions, refresh tokens and signing keys are not purged yet.
 
 ## Env keys (`src/env.ts`, mirrored in `.env.example`)
 
@@ -150,18 +148,13 @@ scenarios against real Postgres as the `closeline_auth` role (`POSTGRES_PORT` mo
   evicted, and if the keys looked at are all locked a new key is refused (fails closed) and they
   move to the back: refusals of a new key are bounded by the locked keys divided by 64.
 - **Known limitations of the per-process cap (go away with hub issue 30; pinned by tests named
-  KNOWN LIMITATION).** Churn resets lockout: a key below its lockout is evicted after about
-  50,000 newer keys, so 5 guesses per roughly 100,000 cheap requests is possible. Filling the cap
-  with locked keys (5 tries each: about 1,000 requests a second for 20 minutes) refuses sign-in
-  for new addresses. Sends are counted only after a hash slot is held and the cooldown lasts 60 s,
-  so 50,000 buckets at their limit need about 830 admitted hashes a second, far above the hash
-  lane's defaults. The edge limit (below) makes both expensive.
+  KNOWN LIMITATION).** Churn resets lockout: a key below its lockout is evicted after about 50,000
+  newer keys (5 guesses per roughly 100,000 cheap requests). Filling the cap with locked keys
+  (about 1,000 requests a second for 20 minutes) refuses sign-in for new addresses. The edge limit
+  (below) makes both expensive; sends are counted only after a hash slot is held.
 - **A stranger can lock a victim out of password sign-in.** Lockout is keyed by address and counted
-  up front, so about 11 wrong tries on someone's address (then one every 15 minutes) keep their
-  correct password refused (429 `rate.limited`) until the failures are forgotten after an hour of
-  quiet. Inherited from the source design; `flow.test.ts` pins it as a known limitation. A
-  follow-up ticket decides the redesign (e.g. key on address plus a device cookie, or exempt a
-  known-good device).
+  up front, so about 11 wrong tries keep the correct password refused (429 `rate.limited`) until
+  an hour of quiet. Inherited; `flow.test.ts` pins it. A follow-up ticket decides the redesign.
 - No production mail provider (hub issue #35): the mailer fails with `mail.unavailable`. Only in
   `local`, `MAIL_LOCAL_URL` selects a Mailpit mailbox adapter: `.claude/rules/mail.md`.
 - **Deployment prerequisite: a per-source rate limit at the edge.** The service has no per-IP
@@ -188,14 +181,14 @@ scenarios against real Postgres as the `closeline_auth` role (`POSTGRES_PORT` mo
 The per-request middleware stack (`createBaseApp`), `/healthz`, and session refresh
 (`Sessions.refresh`: each signed-in device calls it every minute). Refresh is O(1) in users,
 sessions, Organizations and signing keys: one token lookup by hash, one user lookup by id, one
-active-key read (`SigningKeyStore.active`, one row however many keys were retired), one
-membership read to core (the token hook: one HTTP call, retried at most once, 4.15 s worst case,
-asked once per request even if the rotation is retried; a replay inside the grace window asks
-too, only a token spent beyond grace and an expired token cost no call),
-one signature, one rotation. The membership lookup through the HTTP adapter is a hot path too
-(`bench/membership.bench.test.ts`: best batch about 53 ms per 500 lookups, budget 270 ms). The
-JWKS and bearer routes read at most 20 keys, bounded in SQL by retirement time and a limit.
-Budgets are in `bench/`.
+active-key read, one membership read to core (one HTTP call, retried at most once, 4.15 s worst
+case, asked once per request; only a token spent beyond grace and an expired token cost no call),
+one signature, one rotation. The JWKS and bearer routes read at most 20 keys. The membership
+lookup through the HTTP adapter is a hot path too (`bench/membership.bench.test.ts`: best batch
+about 62 ms per 500 lookups, budget 270 ms). That benchmark is plain http over loopback (no TLS,
+no DNS) and the kit client keeps no connection alive, so production pays a TLS handshake per
+lookup inside the 2 s attempt bound; the phase load test must cover this path. A keep-alive option
+in kit is hub issue 45. Budgets are in `bench/`.
 
 A benchmark times `measure(operation)`: a warm-up, then several batches, gated on the fastest, so a
 noisy runner cannot fail it but a real regression does. Budget is about 5x the typical best batch,

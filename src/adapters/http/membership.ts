@@ -3,7 +3,6 @@ import {
   type CoreErrorCode,
   emailSchema,
   errorBodySchema,
-  IDEMPOTENCY_KEY_HEADER,
   INTERNAL_CALL_ERRORS,
   type InternalCallName,
   idempotencyKeySchema,
@@ -19,7 +18,13 @@ import {
   invitationTokenSchema,
   organizationNameSchema,
 } from 'tula-closeline-contract'
-import type { Logger } from 'tula-closeline-kit'
+import {
+  createInternalClient,
+  type Environment,
+  InternalCallError,
+  type InternalClient,
+  type Logger,
+} from 'tula-closeline-kit'
 import type { z } from 'zod'
 import { createConcurrencyLimiter, Saturated } from '~/lib/concurrency'
 import {
@@ -63,6 +68,20 @@ export const DEFAULT_CORE_QUEUE = 256
 /** The largest answer from core that is read; the real ones are under 300 bytes. */
 const MAX_ANSWER_BYTES = 16 * 1024
 
+/**
+ * The most the kit client reads of any answer. Larger than {@link MAX_ANSWER_BYTES} so that a
+ * long error page on a 5xx or 401/403 (never parsed) still reaches the adapter as its status.
+ */
+const CLIENT_MAX_ANSWER_BYTES = 64 * 1024
+
+/** The answer's JSON when it is within {@link MAX_ANSWER_BYTES} once written out, else none. */
+function boundedJson(value: unknown): unknown {
+  if (value === undefined) {
+    return undefined
+  }
+  return Buffer.byteLength(JSON.stringify(value)) > MAX_ANSWER_BYTES ? undefined : value
+}
+
 /** Options for {@link createHttpMembership}. */
 export type HttpMembershipOptions = {
   /** Core's origin, such as `https://core.internal`; no trailing slash needed. */
@@ -71,8 +90,11 @@ export type HttpMembershipOptions = {
   token: string
   /** Where a retry is noted. It receives fixed words and numbers, never a body or a header. */
   logger?: Pick<Logger, 'warn'>
-  /** Injected for tests; defaults to the global `fetch`. */
-  fetch?: (input: string, init: RequestInit) => Promise<Response>
+  /**
+   * Where this deployment runs. The kit's client refuses to be built when
+   * `NODE_TLS_REJECT_UNAUTHORIZED=0` is set outside `local`, which surfaces as a boot error.
+   */
+  environment: Environment
   /** One lookup attempt's bound; defaults to {@link LOOKUP_ATTEMPT_TIMEOUT_MS}. */
   lookupTimeoutMs?: number
   /** A sign-up call's bound; defaults to {@link WRITE_TIMEOUT_MS}. */
@@ -123,53 +145,9 @@ class AttemptFailed extends MembershipUnavailable {
 }
 
 /**
- * What an exchange with core produced: the status, the JSON body when it had one, and the pause
- * a 503 asked for (`Retry-After`), in milliseconds.
+ * What an exchange with core produced: the status and the JSON body when it was a usable one.
  */
-type Answer = { status: number; json: unknown; retryAfterMs?: number }
-
-/** The longest `Retry-After` that is believed; a longer ask is cut to this. */
-const MAX_RETRY_AFTER_MS = 5_000
-
-/** Reads a `Retry-After` given in whole seconds; anything else (a date, junk) is no ask. */
-function parseRetryAfter(value: string | null): number | undefined {
-  if (value === null || !/^\d{1,4}$/.test(value.trim())) {
-    return undefined
-  }
-  return Math.min(MAX_RETRY_AFTER_MS, Number(value.trim()) * 1000)
-}
-
-/** Reads at most {@link MAX_ANSWER_BYTES} of a body; a longer one is refused, not truncated. */
-async function readBounded(response: Response): Promise<string | undefined> {
-  const reader = response.body?.getReader()
-  if (!reader) {
-    return ''
-  }
-  const decoder = new TextDecoder()
-  let text = ''
-  let bytes = 0
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) {
-      return text + decoder.decode()
-    }
-    bytes += value.byteLength
-    if (bytes > MAX_ANSWER_BYTES) {
-      await reader.cancel()
-      return undefined
-    }
-    text += decoder.decode(value, { stream: true })
-  }
-}
-
-/** Parses JSON, or `undefined` when it is not JSON. */
-function parseJson(text: string): unknown {
-  try {
-    return JSON.parse(text)
-  } catch {
-    return undefined
-  }
-}
+type Answer = { status: number; json: unknown }
 
 /** Resolves after `ms`, or rejects as an aborted call when `signal` aborts first. */
 function pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
@@ -202,15 +180,25 @@ function pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
  * Retries: only the lookup (a read), once, after a jittered pause, on a network error, a timeout
  * of the attempt, or a 5xx. The sign-up calls are tried once: the flow retries the whole attempt
  * under the same key. A redirect is never followed (it would carry the secret to another host).
+ * This is the only layer that retries: the kit client is built with one attempt.
  * No message or log line made here contains the secret, a token, an address or a response body.
  */
 export function createHttpMembership(options: HttpMembershipOptions): MembershipClaims {
-  const base = options.baseUrl.replace(/\/+$/, '')
-  const authorization = `Bearer ${options.token}`
-  const doFetch = options.fetch ?? globalThis.fetch
   const lookupTimeoutMs = options.lookupTimeoutMs ?? LOOKUP_ATTEMPT_TIMEOUT_MS
   const writeTimeoutMs = options.writeTimeoutMs ?? WRITE_TIMEOUT_MS
   const retryDelayMs = options.retryDelayMs ?? defaultRetryDelayMs
+  // The kit's client is the only transport: `node:http(s)` with no agent, so a proxy variable in
+  // the environment is never read (ADR 0013). Its own retry is turned down to one attempt: the
+  // retry rules below are this adapter's (a read, once, on any 5xx), and a second layer would
+  // multiply the attempts and the time bound.
+  const core: InternalClient = createInternalClient({
+    baseUrl: options.baseUrl.replace(/\/+$/, ''),
+    secret: options.token,
+    environment: options.environment,
+    userAgent: 'closeline-auth',
+    maxResponseBytes: CLIENT_MAX_ANSWER_BYTES,
+    retry: { maxAttempts: 1 },
+  })
 
   const limiter = createConcurrencyLimiter({
     concurrency: options.concurrency ?? DEFAULT_CORE_CONCURRENCY,
@@ -228,46 +216,39 @@ export function createHttpMembership(options: HttpMembershipOptions): Membership
     if (callerSignal?.aborted) {
       throw new AttemptFailed('the call was aborted', false)
     }
-    const timeout = AbortSignal.timeout(timeoutMs)
-    const signal = callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout
     try {
-      const response = await doFetch(`${base}${path}`, {
+      const response = await core.request({
         method: 'POST',
-        headers: {
-          authorization,
-          'content-type': 'application/json',
-          accept: 'application/json',
-          'user-agent': 'closeline-auth',
-          [IDEMPOTENCY_KEY_HEADER]: idempotencyKey,
-        },
-        body: JSON.stringify(payload),
-        redirect: 'manual',
-        signal,
+        path,
+        body: payload,
+        idempotencyKey,
+        timeoutMs,
+        ...(callerSignal === undefined ? {} : { signal: callerSignal }),
       })
-      // Only an answer that can be used is read: a 5xx, a redirect or an odd status is not.
+      // Only an answer that can be used is read: a 5xx or an odd status is not.
       const readable = response.status === 200 || (response.status >= 400 && response.status < 500)
-      if (!readable) {
-        await response.body?.cancel()
-        const retryAfterMs =
-          response.status === 503 ? parseRetryAfter(response.headers.get('retry-after')) : undefined
-        return {
-          status: response.status,
-          json: undefined,
-          ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
-        }
-      }
-      const text = await readBounded(response)
-      return { status: response.status, json: text === undefined ? undefined : parseJson(text) }
+      return { status: response.status, json: readable ? boundedJson(response.json) : undefined }
     } catch (error) {
       if (callerSignal?.aborted) {
         throw new AttemptFailed('the call was aborted', false)
       }
-      if (timeout.aborted) {
-        throw new AttemptFailed('core did not answer in time', true)
+      // The failure kind only: the client's error carries no secret or body, and nothing else is
+      // copied from it. A redirect, an oversized or non-JSON answer cannot change on a retry.
+      if (error instanceof InternalCallError) {
+        // An answer too big for the client to read is still an answer with a status: a 5xx, a
+        // 401/403 or a 4xx is handled by that status as it was when its body was never read.
+        if (error.failure === 'response_too_large' && error.status !== undefined) {
+          return { status: error.status, json: undefined }
+        }
+        const retryable = error.failure === 'connection' || error.failure === 'timeout'
+        throw new AttemptFailed(
+          error.failure === 'timeout'
+            ? 'core did not answer in time'
+            : `core could not be used (${error.failure})`,
+          retryable
+        )
       }
-      // The name only: a network error's message can quote the address it tried.
-      const kind = error instanceof Error ? error.name : 'unknown'
-      throw new AttemptFailed(`core could not be reached (${kind})`, true)
+      throw new AttemptFailed('core could not be called', false)
     }
   }
 
@@ -438,7 +419,9 @@ export function createHttpMembership(options: HttpMembershipOptions): Membership
         signal
       )
       if (answer.status === 503) {
-        throw new MembershipBusy(answer.retryAfterMs, 'core answered HTTP 503')
+        // The kit's client does not hand back headers, so core's `Retry-After` is not known here;
+        // the abandon loop uses its own pause.
+        throw new MembershipBusy(undefined, 'core answered HTTP 503')
       }
       if (answer.status !== 200) {
         try {

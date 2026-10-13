@@ -343,3 +343,64 @@ describe('the mailer', () => {
     }
   )
 })
+
+describe('turning off certificate checks (ADR 0013)', () => {
+  const quiet = { warn: () => {} }
+  const DEPLOYED = {
+    ENVIRONMENT: 'prod',
+    REGION: 'eu',
+    DATABASE_URL: 'postgres://closeline_auth:x@db/closeline',
+    AUTH_MASTER_KEY: 'ab'.repeat(32),
+    PUBLIC_URL: 'https://auth.eu.example.com/',
+    CORE_BASE_URL: 'https://core.eu.internal.example.com',
+    CORE_INTERNAL_TOKEN: 'c'.repeat(32),
+    SESSION_ALLOWED_ORIGINS: 'https://app.example.com',
+  }
+
+  /** Runs `run` with `NODE_TLS_REJECT_UNAUTHORIZED=0` set, and puts the old value back. */
+  function withChecksOff<T>(run: () => T): T {
+    const before = process.env.NODE_TLS_REJECT_UNAUTHORIZED
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
+    try {
+      return run()
+    } finally {
+      if (before === undefined) {
+        delete process.env.NODE_TLS_REJECT_UNAUTHORIZED
+      } else {
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = before
+      }
+    }
+  }
+
+  test.each(['dev', 'staging', 'prod'] as const)(
+    'the service refuses to boot in %s with NODE_TLS_REJECT_UNAUTHORIZED=0, with a clear message',
+    (environment) => {
+      const env = loadEnv({ ...DEPLOYED, ENVIRONMENT: environment })
+
+      const boot = () => withChecksOff(() => createContainer(env))
+
+      expect(boot).toThrow(/NODE_TLS_REJECT_UNAUTHORIZED=0 turns off certificate checks/)
+      // The message names the variable only: never the secret or the address of core.
+      let message = ''
+      try {
+        boot()
+      } catch (error) {
+        message = String(error)
+      }
+      expect(message).not.toContain(DEPLOYED.CORE_INTERNAL_TOKEN)
+      expect(message).not.toContain('core.eu.internal.example.com')
+    }
+  )
+
+  test('local may set it (a developer machine with a self-signed certificate)', () => {
+    const env = loadEnv({ ENVIRONMENT: 'local', REGION: 'us' })
+
+    expect(() => withChecksOff(() => createMembership(env, quiet))).not.toThrow()
+  })
+
+  test('without the variable the same deployment boots its membership client', () => {
+    const env = loadEnv(DEPLOYED)
+
+    expect(() => createMembership(env, quiet)).not.toThrow()
+  })
+})

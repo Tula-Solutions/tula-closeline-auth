@@ -152,6 +152,7 @@ export function createMembership(env: Env, logger: Pick<Logger, 'warn'>): Member
     return createHttpMembership({
       baseUrl: env.CORE_BASE_URL,
       token: env.CORE_INTERNAL_TOKEN,
+      environment: env.ENVIRONMENT,
       logger,
       concurrency: env.CORE_CONCURRENCY,
       queue: env.CORE_QUEUE,

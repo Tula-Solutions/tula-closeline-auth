@@ -22,7 +22,14 @@ The runtime adapter is `src/adapters/http/membership.ts`, over HTTP to core's in
 (`POST /internal/organizations`, `/internal/invitations/accept`, `/internal/membership`,
 `/internal/organizations/{id}/abandon`) with
 `Authorization: Bearer <CORE_INTERNAL_TOKEN>` and an `Idempotency-Key`. Every answer is parsed with the contract's
-schema; one that does not parse is core being unavailable. Redirects are never followed, and the
+schema; one that does not parse is core being unavailable. The transport is the kit's
+`createInternalClient` (ADR 0013): `node:http(s)` with no agent, so a proxy variable in the
+environment (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, any case) is never read and the secret never
+travels through a proxy; a new connection per call, certificates verified, and the service refuses
+to boot with `NODE_TLS_REJECT_UNAUTHORIZED=0` outside `local`. The adapter is the only place the
+client is built (`environment` is an option, passed by `container.ts`). Do not use `fetch` for a
+call to core; `membership.proxy.test.ts` (a child process with a stand-in proxy named in all six
+variables) fails if a call reaches the proxy. Redirects are never followed, and the
 secret, an invitation token, an address or a body of core never reach a log or an error message
 (tests pin it). Core's accept route is on its `develop` (checked against
 `src/modules/internal/router.ts` and `service.ts` there): a retry by the same user and address
@@ -56,6 +63,12 @@ gives that try back (`VerificationTokenStore.refundAttempt`, one guarded UPDATE 
 counter above zero on an unused token, so tries left never exceed the maximum). A wrong code is
 never given back, and a `MembershipFault` keeps its try spent, so a fault that never clears runs
 the code out instead of looping.
+
+**Retries live in one layer: this adapter** (and the abandon loop in `modules/membership`). The
+kit client is built with `retry: { maxAttempts: 1 }`, because its own rules differ (it retries only
+429, 502, 503, 504 and not a plain 500) and a second layer would multiply attempts and break the
+time bounds below. `membership.attempts.test.ts` pins the attempts of a failing call: lookup 2,
+create 1, accept 1, abandon 1 (the abandon loop adds its own three).
 
 Bounds: the lookup is one HTTP call of 2 s, retried once after 50 to 150 ms of jitter on a
 network error, a timeout or a 5xx (worst case 4.15 s); the sign-up calls are tried once, 4.5 s (the flow retries the attempt
@@ -140,13 +153,14 @@ an account with this address" is this attempt's own earlier request and is never
 `POST /internal/organizations/{id}/abandon`, body `{userId}`, key `abandon:<attempt id>`):
 
 - Up to three tries, a jittered doubling pause of 50 to 150 ms and then 100 to 300 ms (at least
-  core's `Retry-After`, at most 1 s). The 5 s bound is for the whole abandon (all tries and
+  core's `Retry-After`, at most 1 s; known gap: the kit's `request` returns no headers, so the
+  adapter reports `MembershipBusy` without core's ask and the pause is the jittered one). The 5 s bound is for the whole abandon (all tries and
   pauses), and each try is one HTTP call of at most 4.5 s. The sign-up answer never changes.
   Worst case a failed sign-up waits for its call to core (5 s) plus this abandon (5 s): 10 s.
 - 200 is done (core says no live Organization with that id remains; not that this call deleted
   it): logged at warn by ids, not reported. 409 `organization.not_abandonable` is logged by ids
-  at warn, never retried, reported. 5xx, 503 (with `Retry-After`), a timeout or a network error
-  are retried; a 4xx other than that 409 is one call (`MembershipNotRetryable`), as is a rejected
+  at warn, never retried, reported. 5xx, 503 (core's `Retry-After` is not honoured until the kit returns it), a timeout or a
+  network error are retried; a 4xx other than that 409 is one call (`MembershipNotRetryable`), as is a rejected
   secret. An unfinished abandon is logged and reported by ids.
 - A sign-up by invitation is never abandoned: the Organization has other members.
 
