@@ -7,6 +7,9 @@ import {
   INTERNAL_CALL_ERRORS,
   type InternalCallName,
   idempotencyKeySchema,
+  internalAbandonOrganizationParamsSchema,
+  internalAbandonOrganizationRequestSchema,
+  internalAbandonOrganizationResponseSchema,
   internalAcceptInvitationRequestSchema,
   internalAcceptInvitationResponseSchema,
   internalCreateOrganizationRequestSchema,
@@ -21,8 +24,10 @@ import type { z } from 'zod'
 import { createConcurrencyLimiter, Saturated } from '~/lib/concurrency'
 import {
   type Membership,
+  MembershipBusy,
   type MembershipClaims,
   MembershipFault,
+  MembershipNotAbandonable,
   MembershipRefused,
   MembershipRejected,
   MembershipUnavailable,
@@ -116,8 +121,22 @@ class AttemptFailed extends MembershipUnavailable {
   }
 }
 
-/** What an exchange with core produced: the status and the JSON body when it had one. */
-type Answer = { status: number; json: unknown }
+/**
+ * What an exchange with core produced: the status, the JSON body when it had one, and the pause
+ * a 503 asked for (`Retry-After`), in milliseconds.
+ */
+type Answer = { status: number; json: unknown; retryAfterMs?: number }
+
+/** The longest `Retry-After` that is believed; a longer ask is cut to this. */
+const MAX_RETRY_AFTER_MS = 5_000
+
+/** Reads a `Retry-After` given in whole seconds; anything else (a date, junk) is no ask. */
+function parseRetryAfter(value: string | null): number | undefined {
+  if (value === null || !/^\d{1,4}$/.test(value.trim())) {
+    return undefined
+  }
+  return Math.min(MAX_RETRY_AFTER_MS, Number(value.trim()) * 1000)
+}
 
 /** Reads at most {@link MAX_ANSWER_BYTES} of a body; a longer one is refused, not truncated. */
 async function readBounded(response: Response): Promise<string | undefined> {
@@ -228,7 +247,13 @@ export function createHttpMembership(options: HttpMembershipOptions): Membership
       const readable = response.status === 200 || (response.status >= 400 && response.status < 500)
       if (!readable) {
         await response.body?.cancel()
-        return { status: response.status, json: undefined }
+        const retryAfterMs =
+          response.status === 503 ? parseRetryAfter(response.headers.get('retry-after')) : undefined
+        return {
+          status: response.status,
+          json: undefined,
+          ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+        }
       }
       const text = await readBounded(response)
       return { status: response.status, json: text === undefined ? undefined : parseJson(text) }
@@ -317,6 +342,9 @@ export function createHttpMembership(options: HttpMembershipOptions): Membership
       if (known === 'invitation.invalid') {
         throw new MembershipRefused('invitation_invalid')
       }
+      if (known === 'organization.not_abandonable') {
+        throw new MembershipNotAbandonable()
+      }
       // Auth makes a fresh user id for every sign-up attempt, so core saying the user already
       // belongs to an Organization is a fault on one side: retrying cannot clear it and the
       // person cannot fix it, so it is not the outage that `membership.unavailable` means.
@@ -392,6 +420,33 @@ export function createHttpMembership(options: HttpMembershipOptions): Membership
       return answer.status === 200
         ? accept(internalAcceptInvitationResponseSchema, answer)
         : refuse('acceptInvitation', answer)
+    },
+
+    async abandonOrganization({ organizationId, userId, idempotencyKey, signal }): Promise<void> {
+      const params = internalAbandonOrganizationParamsSchema.safeParse({ organizationId })
+      const request = internalAbandonOrganizationRequestSchema.safeParse({ userId })
+      if (!params.success || !request.success) {
+        throw new MembershipUnavailable('the request is not one the contract describes')
+      }
+      // One try: the caller retries under the same key, inside its own bound.
+      const answer = await send(
+        `/internal/organizations/${params.data.organizationId}/abandon`,
+        request.data,
+        idempotencyKey,
+        { retry: false, timeoutMs: writeTimeoutMs },
+        signal
+      )
+      if (answer.status === 503) {
+        throw new MembershipBusy(answer.retryAfterMs, 'core answered HTTP 503')
+      }
+      if (answer.status !== 200) {
+        refuse('abandonOrganization', answer)
+        return
+      }
+      const done = accept(internalAbandonOrganizationResponseSchema, answer)
+      if (done.organizationId !== params.data.organizationId) {
+        throw new MembershipUnavailable('core answered about another Organization')
+      }
     },
 
     async forUser(userId, signal) {

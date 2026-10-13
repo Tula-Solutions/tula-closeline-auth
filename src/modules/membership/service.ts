@@ -1,11 +1,13 @@
-import { AUTH_ERRORS, type UserId } from 'tula-closeline-contract'
+import { AUTH_ERRORS, type OrganizationId, type UserId } from 'tula-closeline-contract'
 import { isAppError } from 'tula-closeline-kit'
 import type { Container } from '~/container'
 import { fail, MembershipFaulted, MembershipOutage } from '~/errors'
 import { withTimeout } from '~/lib/timeout'
 import {
   type Membership,
+  MembershipBusy,
   MembershipFault,
+  MembershipNotAbandonable,
   MembershipRefused,
   MembershipRejected,
 } from '~/ports/membership'
@@ -97,6 +99,90 @@ export async function join(
     return await withTimeout(call, MEMBERSHIP_TIMEOUT_MS, () => timedOut(controller))
   } catch (error) {
     throw translate(error)
+  }
+}
+
+/** How many times one abandon is tried inside the request: the first, then two retries. */
+export const ABANDON_ATTEMPTS = 3
+
+/** The longest pause taken before an abandon retry, however long core asks for. */
+export const ABANDON_MAX_PAUSE_MS = 1_000
+
+/**
+ * What came of asking core to abandon an Organization: `done` (core says no live Organization
+ * with that id remains), `refused` (a live Organization failed core's guard; never retried) or
+ * `unfinished` (core could not be asked or answered something unusable, within the bound).
+ */
+export type AbandonOutcome = 'done' | 'refused' | 'unfinished'
+
+/** The pause before retry number `retry` (1 or 2): jittered, doubling, and at least core's ask. */
+function abandonPauseMs(retry: number, error: unknown): number {
+  const jittered = 50 * 2 ** (retry - 1) * (1 + Math.random())
+  const asked = error instanceof MembershipBusy ? (error.retryAfterMs ?? 0) : 0
+  return Math.min(ABANDON_MAX_PAUSE_MS, Math.max(jittered, asked))
+}
+
+/** Resolves after `ms`, or rejects when `signal` aborts first. */
+function pauseFor(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new Error('membership timed out'))
+      return
+    }
+    const done = () => {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', aborted)
+    }
+    const aborted = () => {
+      done()
+      reject(new Error('membership timed out'))
+    }
+    const timer = setTimeout(() => {
+      done()
+      resolve()
+    }, ms)
+    signal.addEventListener('abort', aborted, { once: true })
+  })
+}
+
+/**
+ * Asks core to abandon an Organization that a sign-up created and whose Owner's account was never
+ * written. Up to {@link ABANDON_ATTEMPTS} tries with a jittered, doubling pause (at least what
+ * core's `Retry-After` asked, at most {@link ABANDON_MAX_PAUSE_MS}), all inside the one
+ * {@link MEMBERSHIP_TIMEOUT_MS} bound, with the same idempotency key each time. It never throws:
+ * the failed sign-up's own answer must not change. A refusal is logged at warn by ids and never
+ * retried; a failure that outlives the tries is logged by ids too. No address, name or message
+ * of core is logged.
+ */
+export async function abandon(
+  deps: MembershipDeps & Pick<Container, 'logger'>,
+  input: { organizationId: OrganizationId; userId: UserId; idempotencyKey: string }
+): Promise<AbandonOutcome> {
+  const controller = new AbortController()
+  const { signal } = controller
+  const { organizationId, userId } = input
+  const run = async (): Promise<AbandonOutcome> => {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await deps.membership.abandonOrganization({ ...input, signal })
+        return 'done'
+      } catch (error) {
+        if (error instanceof MembershipNotAbandonable) {
+          deps.logger.warn('core refused to abandon an Organization', { organizationId, userId })
+          return 'refused'
+        }
+        if (attempt >= ABANDON_ATTEMPTS || error instanceof MembershipRejected || signal.aborted) {
+          throw error
+        }
+        await pauseFor(abandonPauseMs(attempt, error), signal)
+      }
+    }
+  }
+  try {
+    return await withTimeout(run(), MEMBERSHIP_TIMEOUT_MS, () => timedOut(controller))
+  } catch {
+    deps.logger.warn('could not abandon an Organization', { organizationId, userId })
+    return 'unfinished'
   }
 }
 

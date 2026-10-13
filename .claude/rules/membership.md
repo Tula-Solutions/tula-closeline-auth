@@ -19,7 +19,8 @@ paths:
 # The token hook: membership from core
 
 The runtime adapter is `src/adapters/http/membership.ts`, over HTTP to core's internal routes
-(`POST /internal/organizations`, `/internal/invitations/accept`, `/internal/membership`) with
+(`POST /internal/organizations`, `/internal/invitations/accept`, `/internal/membership`,
+`/internal/organizations/{id}/abandon`) with
 `Authorization: Bearer <CORE_INTERNAL_TOKEN>` and an `Idempotency-Key`. Every answer is parsed with the contract's
 schema; one that does not parse is core being unavailable. Redirects are never followed, and the
 secret, an invitation token, an address or a body of core never reach a log or an error message
@@ -118,14 +119,45 @@ After the commit, spending the code and closing the attempt are best-effort (log
 attempt id, never fatal); a failure creating the first session is an error but the account
 exists, and signing in recovers it.
 
-**Orphaned Organizations still need reconciliation (open, a follow-up ticket).** Core can create
-an Organization for a sign-up whose account is never written: the insert loses the address to
-another sign-up (409 `flow.invalid_step`), the insert fails for another reason (500), the process
-dies between core and the insert, or the attempt expires before a retry (a new attempt has a new
-key, so a second Organization). The first two are reported through `reportError` with the
-Organization, user and attempt ids and no address, once per attempt per hour. An orphan is always
-logged with ids, even when the report is suppressed or the limiter map is full. A burned
-invitation is the same. A timed-out call is not reported with an Organization id (none is
-known); a retry with the same key converges. Auth does not clean these up; a reconciliation job
-must find Organizations whose owner never signed in, which needs a call in core that does not
-exist yet.
+## What core is told about the person, and orphaned Organizations
+
+Both sign-up calls send core a copy for its member list (hub ADR 0015, ticket 31):
+`email` is the verified address as normalized (`attempt.identifier`: trimmed, ASCII letters
+folded; the form core's checks fold to), `name` is `composeMemberName(firstName, lastName)`
+(`modules/membership/profile.ts`): the two optional parts trimmed and joined by one space, `null`
+when nothing remains. Auth's own limits (100 characters per part, 201 with the space) equal the
+contract's `personNameSchema` maximum, but auth allows control characters that the contract
+refuses, so each run of them becomes one space and the result is checked against the schema; a
+name that still failed would be sent as `null`, never fail the sign-up at core.
+
+**An Owner's Organization whose account is not written is abandoned (ticket 36).** After core
+made the Organization, two branches of `verifyEmail` leave nobody owning it: the insert loses the
+address to another sign-up (409 `flow.invalid_step`), and the insert throws an error that is not
+an AppError (500). For these the flow calls
+`Membership.abandon` (port `abandonOrganization`; `POST /internal/organizations/{id}/abandon`
+with body `{userId}` and the key `abandon:<attempt id>`) through `settleOrphan`:
+
+- Up to three tries, a jittered doubling pause of 50 to 150 ms and then 100 to 300 ms (at least
+  core's `Retry-After`, at most 1 s), all inside the one 5 s bound; each try is one HTTP call of
+  at most 4.5 s. A rejected secret is not retried. It never throws and never changes the failed
+  sign-up's answer.
+- 200 is done (core says no live Organization with that id remains; it does not say this call
+  deleted it). Logged at warn by ids, not reported.
+- 409 `organization.not_abandonable` is logged by ids at warn, never retried, and reported
+  (once per attempt per hour).
+- 503 (with `Retry-After`), a timeout, a network error or a bad body are retried; if the tries run
+  out the case is logged by ids and reported. **Nothing is kept for later**: see below.
+- A throw from the insert is abandoned only after a read shows no account for the user id: the
+  write may have committed before the error, and then the Organization must stand. If the read
+  fails too, nothing is abandoned and the case is reported.
+- A sign-up by invitation is never abandoned: the Organization has other members, core would
+  refuse, and the person is a member there. It is reported (a burned invitation).
+- Core frees the user id on abandon and a create is idempotent on the user id, so a client
+  retrying the same attempt gets a fresh Organization, not the abandoned one.
+
+**Still open: a sweep.** Cases that are not finished in the request (core down for longer than
+the tries, a process that dies between core and the insert, an attempt that expires, a timed-out
+create whose Organization id was never learned) are only logged and reported by ids. A durable
+record needs a table in `tula-closeline-db`; no existing `auth` table fits (`events` is a
+delivery outbox with a retention floor, `flow_attempts` is purged ten seconds after expiry). Until
+then a person reconciles from the reports.

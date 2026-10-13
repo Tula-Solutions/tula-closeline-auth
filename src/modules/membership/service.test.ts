@@ -1,7 +1,14 @@
 import { describe, expect, test } from 'bun:test'
 import { formatId, type UserId } from 'tula-closeline-contract'
 import { createMemoryMembership } from '~/adapters/memory/membership'
-import { MembershipUnavailable } from '~/ports/membership'
+import type { Container } from '~/container'
+import {
+  MembershipBusy,
+  type MembershipClaims,
+  MembershipNotAbandonable,
+  MembershipRejected,
+  MembershipUnavailable,
+} from '~/ports/membership'
 import * as Membership from './service'
 
 const userId = formatId('usr', crypto.randomUUID()) as UserId
@@ -227,5 +234,105 @@ describe('what a token may be issued for', () => {
         'signup:another-key-1'
       )
     ).rejects.toMatchObject({ details: { retryAfter: Membership.MEMBERSHIP_RETRY_AFTER_SECONDS } })
+  })
+})
+
+describe('abandoning an Organization', () => {
+  const organizationId = formatId('org', crypto.randomUUID())
+  const owner = formatId('usr', crypto.randomUUID())
+  const input = { organizationId, userId: owner, idempotencyKey: 'abandon:0123456789abcdef' }
+  const quiet = () => {
+    const lines: { message: string; fields: unknown }[] = []
+    return {
+      lines,
+      logger: {
+        warn: (message: string, fields?: unknown) => void lines.push({ message, fields }),
+      } as unknown as Container['logger'],
+    }
+  }
+  /** A membership double whose abandon answers from a script, one answer per call. */
+  const scripted = (...answers: (Error | undefined)[]) => {
+    const calls: { organizationId: string; userId: string; idempotencyKey: string }[] = []
+    const membership = {
+      abandonOrganization: async (call: (typeof calls)[number]) => {
+        calls.push({
+          organizationId: call.organizationId,
+          userId: call.userId,
+          idempotencyKey: call.idempotencyKey,
+        })
+        const answer = answers[Math.min(calls.length, answers.length) - 1]
+        if (answer) {
+          throw answer
+        }
+      },
+    } as unknown as MembershipClaims
+    return { membership, calls }
+  }
+
+  test('200 is done after one call', async () => {
+    const { membership, calls } = scripted(undefined)
+    const { logger } = quiet()
+
+    expect(await Membership.abandon({ membership, logger }, input)).toBe('done')
+    expect(calls).toEqual([input])
+  })
+
+  test('a refusal is logged by ids at warn and never retried', async () => {
+    const { membership, calls } = scripted(new MembershipNotAbandonable())
+    const { logger, lines } = quiet()
+
+    expect(await Membership.abandon({ membership, logger }, input)).toBe('refused')
+
+    expect(calls).toHaveLength(1)
+    expect(lines).toEqual([
+      {
+        message: 'core refused to abandon an Organization',
+        fields: { organizationId, userId: owner },
+      },
+    ])
+  })
+
+  test('a transient failure that clears is done, with the same key on every try', async () => {
+    const { membership, calls } = scripted(
+      new MembershipBusy(1),
+      new MembershipUnavailable(),
+      undefined
+    )
+    const { logger } = quiet()
+
+    expect(await Membership.abandon({ membership, logger }, input)).toBe('done')
+
+    expect(calls).toHaveLength(3)
+    expect(new Set(calls.map((c) => c.idempotencyKey))).toEqual(new Set([input.idempotencyKey]))
+  })
+
+  test('a transient failure past the tries is unfinished after exactly the allowed tries', async () => {
+    const { membership, calls } = scripted(new MembershipUnavailable())
+    const { logger, lines } = quiet()
+
+    expect(await Membership.abandon({ membership, logger }, input)).toBe('unfinished')
+
+    expect(calls).toHaveLength(Membership.ABANDON_ATTEMPTS)
+    expect(lines).toEqual([
+      { message: 'could not abandon an Organization', fields: { organizationId, userId: owner } },
+    ])
+  })
+
+  test('a rejected shared secret is not retried', async () => {
+    const { membership, calls } = scripted(new MembershipRejected())
+    const { logger } = quiet()
+
+    expect(await Membership.abandon({ membership, logger }, input)).toBe('unfinished')
+    expect(calls).toHaveLength(1)
+  })
+
+  test('nothing but ids is logged, whatever the failure says', async () => {
+    const { membership } = scripted(new MembershipUnavailable('maya@northline.app secret-token'))
+    const { logger, lines } = quiet()
+
+    await Membership.abandon({ membership, logger }, input)
+
+    expect(JSON.stringify(lines)).not.toContain('maya@northline.app')
+    expect(JSON.stringify(lines)).not.toContain('secret-token')
   })
 })

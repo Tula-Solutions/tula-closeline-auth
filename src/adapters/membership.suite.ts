@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import { formatId, type OrganizationStatus } from 'tula-closeline-contract'
-import { type MembershipClaims, MembershipRefused, MembershipUnavailable } from '~/ports/membership'
+import {
+  type MembershipClaims,
+  MembershipNotAbandonable,
+  MembershipRefused,
+  MembershipUnavailable,
+} from '~/ports/membership'
 
 /** What the membership suite needs: the adapter and a way to arrange an invitation for it. */
 export type MembershipHarness = {
@@ -113,6 +118,82 @@ export function membershipSuite(name: string, make: () => MembershipHarness): vo
           organizationStatus: status,
         })
       }
+    })
+
+    test('abandoning an Organization with only its Owner removes it, and the user can start again', async () => {
+      const { adapter } = make()
+      const userId = user()
+      const first = await adapter.createOrganization({
+        email: 'maya@northline.app',
+        memberName: 'Maya Rao',
+        userId,
+        name: 'Northline',
+        idempotencyKey: crypto.randomUUID(),
+      })
+
+      await adapter.abandonOrganization({
+        organizationId: first.organizationId,
+        userId,
+        idempotencyKey: `abandon:${crypto.randomUUID()}`,
+      })
+
+      expect(await adapter.forUser(userId)).toBeNull()
+      const again = await adapter.createOrganization({
+        email: 'maya@northline.app',
+        memberName: 'Maya Rao',
+        userId,
+        name: 'Northline',
+        idempotencyKey: crypto.randomUUID(),
+      })
+      expect(again.organizationId).not.toBe(first.organizationId)
+    })
+
+    test('abandoning again, or an Organization that never existed, is done', async () => {
+      const { adapter } = make()
+      const userId = user()
+      const { organizationId } = await adapter.createOrganization({
+        email: 'maya@northline.app',
+        memberName: null,
+        userId,
+        name: 'Northline',
+        idempotencyKey: crypto.randomUUID(),
+      })
+      const abandon = (id: typeof organizationId, who = userId) =>
+        adapter.abandonOrganization({
+          organizationId: id,
+          userId: who,
+          idempotencyKey: `abandon:${crypto.randomUUID()}`,
+        })
+
+      await abandon(organizationId)
+
+      await expect(abandon(organizationId)).resolves.toBeUndefined()
+      await expect(abandon(organizationId, user())).resolves.toBeUndefined()
+      await expect(
+        abandon(formatId('org', crypto.randomUUID()) as typeof organizationId)
+      ).resolves.toBeUndefined()
+    })
+
+    test('abandoning a live Organization for a user who is not its only member is refused and changes nothing', async () => {
+      const { adapter } = make()
+      const owner = user()
+      const { organizationId } = await adapter.createOrganization({
+        email: 'maya@northline.app',
+        memberName: null,
+        userId: owner,
+        name: 'Northline',
+        idempotencyKey: crypto.randomUUID(),
+      })
+
+      await expect(
+        adapter.abandonOrganization({
+          organizationId,
+          userId: user(),
+          idempotencyKey: `abandon:${crypto.randomUUID()}`,
+        })
+      ).rejects.toBeInstanceOf(MembershipNotAbandonable)
+
+      expect(await adapter.forUser(owner)).toMatchObject({ organizationId, role: 'owner' })
     })
 
     test('a blank Organization name is refused', async () => {

@@ -8,7 +8,13 @@ import {
 } from 'tula-closeline-contract'
 import { membershipSuite } from '~/adapters/membership.suite'
 import { describeError } from '~/describe-error'
-import { MembershipFault, MembershipRefused, MembershipUnavailable } from '~/ports/membership'
+import {
+  MembershipBusy,
+  MembershipFault,
+  MembershipNotAbandonable,
+  MembershipRefused,
+  MembershipUnavailable,
+} from '~/ports/membership'
 import { type FakeCore, type Reply, startFakeCore } from '~/testing/fake-core'
 import {
   CoreCredentialsRejected,
@@ -40,7 +46,7 @@ const INVITE_TOKEN = `inv-${'z'.repeat(30)}`
 
 /** The three calls, each as a function of an adapter, for tests that treat them alike. */
 const CALLS: Record<
-  Exclude<InternalCallName, 'updateMemberProfile' | 'abandonOrganization'>,
+  Exclude<InternalCallName, 'updateMemberProfile'>,
   (adapter: ReturnType<typeof connect>['adapter'], signal?: AbortSignal) => Promise<unknown>
 > = {
   createOrganization: (adapter, signal) =>
@@ -62,6 +68,13 @@ const CALLS: Record<
       signal,
     }),
   membership: (adapter, signal) => adapter.forUser(user(), signal),
+  abandonOrganization: (adapter, signal) =>
+    adapter.abandonOrganization({
+      organizationId: formatId('org', crypto.randomUUID()),
+      userId: user(),
+      idempotencyKey: key(),
+      signal,
+    }),
 }
 const CALL_NAMES = Object.keys(CALLS) as (keyof typeof CALLS)[]
 
@@ -502,6 +515,8 @@ describe('what core can answer', () => {
       expect(error).toMatchObject({ reason: 'invitation_invalid' })
     } else if (CORE_ERRORS[code].status === 403) {
       expect(error).toBeInstanceOf(CoreCredentialsRejected)
+    } else if (name === 'abandonOrganization' && code === 'organization.not_abandonable') {
+      expect(error).toBeInstanceOf(MembershipNotAbandonable)
     } else if (
       code === 'membership.already_member' &&
       (name === 'createOrganization' || name === 'acceptInvitation')
@@ -726,5 +741,138 @@ describe('what the sign-up calls carry about the person (ADR 0015)', () => {
     })
 
     expect(core.requests[0]?.body).toMatchObject({ name: 'Rae Pell', email: 'rep@example.com' })
+  })
+})
+
+describe('abandoning an Organization', () => {
+  const organizationId = () => formatId('org', crypto.randomUUID())
+
+  test('the request is one POST to the Organization with the user id, the secret and the key', async () => {
+    const { core, adapter } = connect()
+    const org = organizationId()
+    const userId = user()
+    const idempotencyKey = `abandon:${crypto.randomUUID()}`
+
+    await adapter.abandonOrganization({ organizationId: org, userId, idempotencyKey })
+
+    expect(core.requests).toHaveLength(1)
+    const [request] = core.requests
+    expect(request?.method).toBe('POST')
+    expect(request?.path).toBe(`/internal/organizations/${org}/abandon`)
+    expect(request?.headers.authorization).toBe(`Bearer ${core.secret}`)
+    expect(request?.headers['idempotency-key']).toBe(idempotencyKey)
+    expect(request?.body).toEqual({ userId })
+  })
+
+  test('200 is done, whether or not the Organization ever existed', async () => {
+    const { adapter } = connect()
+
+    await expect(
+      adapter.abandonOrganization({
+        organizationId: organizationId(),
+        userId: user(),
+        idempotencyKey: key(),
+      })
+    ).resolves.toBeUndefined()
+  })
+
+  test('409 not_abandonable is a refusal that is not an outage', async () => {
+    const { core, adapter } = connect()
+    core.script(failure('organization.not_abandonable'))
+
+    const error = await adapter
+      .abandonOrganization({
+        organizationId: organizationId(),
+        userId: user(),
+        idempotencyKey: key(),
+      })
+      .catch((e: unknown) => e)
+
+    expect(error).toBeInstanceOf(MembershipNotAbandonable)
+    expect(error).not.toBeInstanceOf(MembershipUnavailable)
+  })
+
+  test('503 with Retry-After is busy and carries the pause, cut to a bound', async () => {
+    const { core, adapter } = connect()
+    const input = () => ({
+      organizationId: organizationId(),
+      userId: user(),
+      idempotencyKey: key(),
+    })
+    core.script(
+      { kind: 'json', status: 503, body: {}, headers: { 'retry-after': '2' } },
+      { kind: 'json', status: 503, body: {}, headers: { 'retry-after': '9999' } },
+      { kind: 'json', status: 503, body: {}, headers: { 'retry-after': 'soon' } }
+    )
+
+    const asked = await adapter.abandonOrganization(input()).catch((e: unknown) => e)
+    const huge = await adapter.abandonOrganization(input()).catch((e: unknown) => e)
+    const junk = await adapter.abandonOrganization(input()).catch((e: unknown) => e)
+
+    expect(asked).toBeInstanceOf(MembershipBusy)
+    expect(asked).toMatchObject({ retryAfterMs: 2_000 })
+    expect(huge).toMatchObject({ retryAfterMs: 5_000 })
+    expect(junk).toBeInstanceOf(MembershipBusy)
+    expect(junk).toMatchObject({ retryAfterMs: undefined })
+    expect(core.requests).toHaveLength(3)
+  })
+
+  test('a timeout is unavailable, and the request is sent once', async () => {
+    const { core, adapter } = connect({ writeTimeoutMs: 20 })
+    core.script({ kind: 'hang' })
+
+    await expect(
+      adapter.abandonOrganization({
+        organizationId: organizationId(),
+        userId: user(),
+        idempotencyKey: key(),
+      })
+    ).rejects.toBeInstanceOf(MembershipUnavailable)
+
+    expect(core.requests).toHaveLength(1)
+  })
+
+  test.each([
+    ['a body that is not JSON', { kind: 'text', status: 200, body: 'ok' } as const],
+    ['a status other than deleted', json(200, { organizationId: 'x', status: 'active' })],
+    ['an empty object', json(200, {})],
+  ])('%s is unavailable', async (_name, reply) => {
+    const { core, adapter } = connect()
+    core.script(reply)
+
+    await expect(
+      adapter.abandonOrganization({
+        organizationId: organizationId(),
+        userId: user(),
+        idempotencyKey: key(),
+      })
+    ).rejects.toBeInstanceOf(MembershipUnavailable)
+  })
+
+  test('an answer about another Organization is not believed', async () => {
+    const { core, adapter } = connect()
+    core.script(json(200, { organizationId: organizationId(), status: 'deleted' }))
+
+    await expect(
+      adapter.abandonOrganization({
+        organizationId: organizationId(),
+        userId: user(),
+        idempotencyKey: key(),
+      })
+    ).rejects.toBeInstanceOf(MembershipUnavailable)
+  })
+
+  test('an Organization id that is not one is never put in a path', async () => {
+    const { core, adapter } = connect()
+
+    await expect(
+      adapter.abandonOrganization({
+        organizationId: '../x' as ReturnType<typeof organizationId>,
+        userId: user(),
+        idempotencyKey: key(),
+      })
+    ).rejects.toBeInstanceOf(MembershipUnavailable)
+
+    expect(core.requests).toHaveLength(0)
   })
 })

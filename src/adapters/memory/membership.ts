@@ -9,8 +9,10 @@ import {
 } from 'tula-closeline-contract'
 import {
   type Membership,
+  MembershipBusy,
   type MembershipClaims,
   type MembershipLookup,
+  MembershipNotAbandonable,
   MembershipRefused,
   MembershipUnavailable,
 } from '~/ports/membership'
@@ -30,12 +32,24 @@ export type MemoryMembership = MembershipClaims & {
    * called or the call's signal aborts. Lookups (`forUser`) are not held.
    */
   hold: () => () => void
+  /** Make the abandon calls refuse as core does for a live Organization that fails its guard. */
+  refuseAbandons: (refuse: boolean) => void
+  /** Make the next `count` abandon calls fail as a transient outage (core busy, 503). */
+  failNextAbandons: (count: number) => void
   /** Every Organization created, in order. */
   readonly organizations: { name: string; owner: UserId; organizationId: string }[]
   /** The email and name core was given for each member, in order (create and accept). */
   readonly profiles: { userId: UserId; email: string; name: string | null }[]
+  /** Every abandon call received, in order, with the key it carried. */
+  readonly abandons: { organizationId: string; userId: UserId; idempotencyKey: string }[]
   /** How many calls were made, by operation. */
-  readonly calls: { create: number; accept: number; lookup: number; aborted: number }
+  readonly calls: {
+    create: number
+    accept: number
+    lookup: number
+    abandon: number
+    aborted: number
+  }
 }
 
 /** Builds the memory membership. Its answers are what the real service gives, minus the network. */
@@ -46,8 +60,11 @@ export function createMemoryMembership(): MemoryMembership {
   const organizations: MemoryMembership['organizations'] = []
   const statuses = new Map<string, OrganizationStatus>()
   const profiles: MemoryMembership['profiles'] = []
-  const calls = { create: 0, accept: 0, lookup: 0, aborted: 0 }
+  const abandons: MemoryMembership['abandons'] = []
+  const calls = { create: 0, accept: 0, lookup: 0, abandon: 0, aborted: 0 }
   let broken = false
+  let refusing = false
+  let failing = 0
   const guard = () => {
     if (broken) {
       throw new MembershipUnavailable()
@@ -79,7 +96,14 @@ export function createMemoryMembership(): MemoryMembership {
   return {
     organizations,
     profiles,
+    abandons,
     calls,
+    refuseAbandons: (refuse) => {
+      refusing = refuse
+    },
+    failNextAbandons: (count) => {
+      failing = count
+    },
     hold: () => {
       let release: () => void = () => {}
       gate = new Promise<void>((resolve) => {
@@ -152,6 +176,33 @@ export function createMemoryMembership(): MemoryMembership {
       members.set(userId, membership)
       byKey.set(idempotencyKey, membership)
       return membership
+    },
+    async abandonOrganization({ organizationId, userId, idempotencyKey, signal }) {
+      calls.abandon += 1
+      abandons.push({ organizationId, userId, idempotencyKey })
+      guard()
+      await proceed(signal)
+      if (failing > 0) {
+        failing -= 1
+        throw new MembershipBusy(undefined, 'core answered HTTP 503')
+      }
+      const here = [...members.entries()].filter(([, m]) => m.organizationId === organizationId)
+      const live = here.length > 0 && statuses.get(organizationId) !== 'deleted'
+      if (!live) {
+        return
+      }
+      const [only] = here
+      if (refusing || here.length !== 1 || only?.[0] !== userId) {
+        throw new MembershipNotAbandonable()
+      }
+      // Core frees the user id at once and forgets the sign-up's key, so a retry starts afresh.
+      members.delete(userId)
+      statuses.set(organizationId, 'deleted')
+      for (const [key, value] of byKey) {
+        if (value.organizationId === organizationId) {
+          byKey.delete(key)
+        }
+      }
     },
     async forUser(userId, signal) {
       calls.lookup += 1

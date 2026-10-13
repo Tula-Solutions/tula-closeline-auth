@@ -6,6 +6,8 @@ import {
   formatId,
   type InvitableRole,
   idempotencyKeySchema,
+  internalAbandonOrganizationParamsSchema,
+  internalAbandonOrganizationRequestSchema,
   internalAcceptInvitationRequestSchema,
   internalCreateOrganizationRequestSchema,
   internalMembershipRequestSchema,
@@ -207,6 +209,28 @@ export function startFakeCore(secret = 'fake-core-secret-0123456789abcdef-0123')
             }
           : { found: false }
       )
+    }
+    const abandonPath = /^\/internal\/organizations\/([^/]+)\/abandon$/.exec(path)
+    if (abandonPath) {
+      const params = internalAbandonOrganizationParamsSchema.safeParse({
+        organizationId: abandonPath[1],
+      })
+      const parsed = internalAbandonOrganizationRequestSchema.safeParse(body)
+      if (!(params.success && parsed.success)) {
+        return coreError('request.invalid')
+      }
+      const { organizationId } = params.data
+      const here = [...members.entries()].filter(([, m]) => m.organizationId === organizationId)
+      const status = statuses.get(organizationId) ?? 'active'
+      if (here.length > 0 && status !== 'deleted') {
+        // Like core: one member, that user, and an Organization that is not suspended.
+        if (here.length !== 1 || here[0]?.[0] !== parsed.data.userId || status === 'suspended') {
+          return coreError('organization.not_abandonable')
+        }
+        members.delete(parsed.data.userId)
+        statuses.set(organizationId, 'deleted')
+      }
+      return Response.json({ organizationId, status: 'deleted' })
     }
     return Response.json(
       { error: { code: 'request.not_found', message: 'No such route.' } },

@@ -181,3 +181,85 @@ describe('how often a failing core reaches the error tracker', () => {
     expect(outageWarnings(deps.logLines)[0]).toMatchObject({ cause: 'MembershipUnavailable' })
   })
 })
+
+describe('an Organization abandoned over HTTP after the account failed to write', () => {
+  /** Reports about an Organization left without an owner (the 500 itself is reported too). */
+  const orphanReports = (base: { reported: { error: unknown }[] }) =>
+    base.reported.filter(
+      (entry) => entry.error instanceof Error && entry.error.message.includes('reconcile')
+    )
+  const abandonRequests = (core: FakeCore) =>
+    core.requests.filter((request) => request.path.endsWith('/abandon'))
+
+  test('sign-up sends core the address and name, and a failed account write abandons the Organization it made', async () => {
+    const { core, base, verify } = await setup()
+    base.users.create = async () => {
+      throw new Error('connection reset')
+    }
+
+    const failed = await verify()
+
+    expect(failed.status).toBe(500)
+    const [create] = core.requests
+    expect(create?.path).toBe('/internal/organizations')
+    expect(create?.body).toMatchObject({ email: EMAIL, name: null })
+    const [abandon] = abandonRequests(core)
+    expect(abandonRequests(core)).toHaveLength(1)
+    expect(abandon?.headers['idempotency-key']).toStartWith('abandon:')
+    expect(abandon?.headers.authorization).toBe(`Bearer ${core.secret}`)
+    expect(abandon?.body).toEqual({ userId: expect.stringMatching(/^usr_/) })
+    expect(orphanReports(base)).toHaveLength(0)
+  })
+
+  test('core refusing the abandon (409) is reported once and the answer is still the 500', async () => {
+    const { core, base, verify } = await setup()
+    base.users.create = async () => {
+      throw new Error('connection reset')
+    }
+    // Scripted answers go to the next requests in order: the create, then the abandon.
+    core.script(
+      {
+        kind: 'json',
+        status: 200,
+        body: { organizationId: `org_${'a'.repeat(32)}`, role: 'owner' },
+      },
+      {
+        kind: 'json',
+        status: 409,
+        body: { error: { code: 'organization.not_abandonable', message: 'no' } },
+      }
+    )
+
+    const failed = await verify()
+
+    expect(failed.status).toBe(500)
+    expect(abandonRequests(core)).toHaveLength(1)
+    expect(orphanReports(base)).toHaveLength(1)
+    const everything = JSON.stringify([base.logLines, base.reported.map((r) => String(r.error))])
+    expect(everything).toContain(`org_${'a'.repeat(32)}`)
+    expect(everything).not.toContain(EMAIL)
+    expect(everything).not.toContain(core.secret)
+  })
+
+  test('busy twice then done: three requests, one key, no report', async () => {
+    const { core, base, verify } = await setup()
+    base.users.create = async () => {
+      throw new Error('connection reset')
+    }
+    const org = `org_${'b'.repeat(32)}`
+    core.script(
+      { kind: 'json', status: 200, body: { organizationId: org, role: 'owner' } },
+      { kind: 'json', status: 503, body: {}, headers: { 'retry-after': '0' } },
+      { kind: 'json', status: 503, body: {}, headers: { 'retry-after': '0' } },
+      { kind: 'json', status: 200, body: { organizationId: org, status: 'deleted' } }
+    )
+
+    const failed = await verify()
+
+    expect(failed.status).toBe(500)
+    const sent = abandonRequests(core)
+    expect(sent).toHaveLength(3)
+    expect(new Set(sent.map((r) => r.headers['idempotency-key'])).size).toBe(1)
+    expect(orphanReports(base)).toHaveLength(0)
+  })
+})

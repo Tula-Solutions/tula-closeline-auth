@@ -56,6 +56,32 @@ export class MembershipRejected extends MembershipUnavailable {
 }
 
 /**
+ * Thrown when core is busy or answered 5xx and asked to be tried again after a pause
+ * (`Retry-After`); a kind of {@link MembershipUnavailable} that carries the pause core asked for.
+ */
+export class MembershipBusy extends MembershipUnavailable {
+  /** The pause core asked for, in milliseconds, or `undefined` when it named none. */
+  readonly retryAfterMs: number | undefined
+  constructor(retryAfterMs?: number, message = 'core is busy') {
+    super(message)
+    this.name = 'MembershipBusy'
+    this.retryAfterMs = retryAfterMs
+  }
+}
+
+/**
+ * Thrown when core refuses to abandon an Organization that is live and fails its guard (another
+ * member, a different sole member, 24 hours old or more, or suspended). Retrying cannot change
+ * the answer, so the caller reports it instead.
+ */
+export class MembershipNotAbandonable extends Error {
+  constructor(message = 'core refused to abandon the Organization') {
+    super(message)
+    this.name = 'MembershipNotAbandonable'
+  }
+}
+
+/**
  * Organization membership, which lives in the core service (ADR 0005). Auth never stores it: it
  * asks, once per token, and stamps the answer into `org` and `role`. Every call has a timeout and
  * is idempotent on its key, so a retried sign-up cannot create a second Organization.
@@ -100,6 +126,25 @@ export interface MembershipClaims {
     idempotencyKey: string
     signal?: AbortSignal
   }): Promise<Membership>
+
+  /**
+   * Asks core to delete an Organization that a sign-up created and whose Owner's account was
+   * never written. One attempt: the caller owns the bound and the bounded, jittered retry. Core
+   * answers success whenever no live Organization with that id remains, which does not mean this
+   * call deleted it.
+   *
+   * @param input.idempotencyKey - Fixed per case, so every retry sends the same key.
+   * @param input.signal - As for {@link MembershipClaims.createOrganization}.
+   * @throws MembershipNotAbandonable when a live Organization fails core's guard (never
+   *   retried); MembershipBusy or MembershipUnavailable on any other failure (retried by the
+   *   caller).
+   */
+  abandonOrganization(input: {
+    organizationId: OrganizationId
+    userId: UserId
+    idempotencyKey: string
+    signal?: AbortSignal
+  }): Promise<void>
 
   /**
    * The Organization, role and Organization status for an existing user, or `null` if they have

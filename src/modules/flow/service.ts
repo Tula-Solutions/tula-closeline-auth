@@ -1,4 +1,10 @@
-import { AUTH_ERRORS, ERRORS, formatId, type UserId } from 'tula-closeline-contract'
+import {
+  AUTH_ERRORS,
+  ERRORS,
+  formatId,
+  type OrganizationId,
+  type UserId,
+} from 'tula-closeline-contract'
 import { isAppError } from 'tula-closeline-kit'
 import { z } from 'zod'
 import type { Container } from '~/container'
@@ -312,6 +318,61 @@ export async function reportOrphan(
   }
 }
 
+/** Whether the user has an account: `undefined` when that could not be read. Never throws. */
+async function accountExists(
+  deps: Pick<Container, 'users'>,
+  tenant: Tenant,
+  userId: string
+): Promise<boolean | undefined> {
+  try {
+    return (await deps.users.findById(tenant.environmentId, userId)) !== null
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Deals with an Organization that core made for a sign-up whose account was not written: asks core
+ * to abandon it (when `abandon` is true) with the key `abandon:<attempt id>`, and reports it to
+ * the tracker (ids only, once per attempt per hour, as {@link reportOrphan}) only if it is still
+ * there afterwards: core refused, or could not be asked within the bound. It never throws, and the
+ * failed sign-up's answer is not changed by what it finds. Exported for its tests.
+ */
+export async function settleOrphan(
+  deps: Pick<Container, 'logger' | 'rateLimiter' | 'membership'>,
+  context: ClientContext,
+  status: number,
+  orphan: {
+    organizationId: string
+    userId: string
+    attemptId: string
+    why: string
+    abandon: boolean
+  }
+): Promise<void> {
+  const { abandon, ...ids } = orphan
+  let outcome: Membership.AbandonOutcome | 'not_asked' = 'not_asked'
+  if (abandon) {
+    try {
+      outcome = await Membership.abandon(deps, {
+        organizationId: ids.organizationId as OrganizationId,
+        userId: ids.userId as UserId,
+        idempotencyKey: `abandon:${ids.attemptId}`,
+      })
+    } catch {
+      outcome = 'unfinished'
+    }
+  }
+  if (outcome === 'done') {
+    deps.logger.warn('an Organization with no owner was abandoned', ids)
+    return
+  }
+  await reportOrphan(deps, context, status, {
+    ...ids,
+    why: `${ids.why}; abandon ${outcome === 'not_asked' ? 'not asked' : outcome}`,
+  })
+}
+
 /**
  * Tells the deployment that core said a brand new user already belongs to an Organization (a
  * fault on one side: auth makes the user id for this attempt alone). Ids only, never an address.
@@ -433,12 +494,15 @@ export async function verifyEmail(
     throw error
   }
   // From here core has made an Organization: if the account is not written, nobody owns it.
+  // An Owner's Organization is abandoned at once; an accepted Invitation joined an Organization
+  // with other members, which core would refuse to abandon, so that case is only reported.
   const orphan = (why: string, status: number) =>
-    reportOrphan(deps, context, status, {
+    settleOrphan(deps, context, status, {
       organizationId: membership.organizationId,
       userId: userUuid,
       attemptId: attempt.id,
       why,
+      abandon: join.kind === 'create',
     })
   let created: boolean
   try {
@@ -465,7 +529,20 @@ export async function verifyEmail(
     }
   } catch (error) {
     if (!isAppError(error)) {
-      await orphan('the account could not be written', 500)
+      // The write may have committed before the error (a dropped connection), in which case the
+      // account exists and its Organization must stand: abandon only once a read shows no account.
+      const written = await accountExists(deps, tenant, userId)
+      if (written === false) {
+        await orphan('the account could not be written', 500)
+      } else if (written === undefined) {
+        // Nothing can be said about the account, so nothing is abandoned: report it for a person.
+        await reportOrphan(deps, context, 500, {
+          organizationId: membership.organizationId,
+          userId: userUuid,
+          attemptId: attempt.id,
+          why: 'the account could not be written, and could not be read back; abandon not asked',
+        })
+      }
     }
     throw error
   }
