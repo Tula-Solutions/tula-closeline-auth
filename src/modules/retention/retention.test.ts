@@ -108,8 +108,8 @@ describe('what a purge leaves for a sign-up still finishing', () => {
     expect(await deps.flowAttempts.findById(tenant.environmentId, longExpired ?? '')).toBeNull()
   })
 
-  test('the grace is the time core is given to answer', () => {
-    expect(Retention.PURGE_GRACE_MS).toBe(MEMBERSHIP_TIMEOUT_MS)
+  test('the grace is twice the time core is given to answer', () => {
+    expect(Retention.PURGE_GRACE_MS).toBe(2 * MEMBERSHIP_TIMEOUT_MS)
   })
 })
 

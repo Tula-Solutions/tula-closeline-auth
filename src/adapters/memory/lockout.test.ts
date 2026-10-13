@@ -92,6 +92,27 @@ describe('MemoryLockout', () => {
     expect(lockout.size).toBeLessThanOrEqual(50)
   })
 
+  test('when every key is locked and the map is small, refusals until one unlocks cost no scan', async () => {
+    const clock = new FixedClock()
+    const lockout = new MemoryLockout(clock, { maxKeys: 50 })
+    for (let n = 0; n < 50; n++) {
+      for (let i = 0; i < 4; i++) {
+        await lockout.attempt(`full${n}`, policy, clock.now())
+      }
+    }
+
+    const first = await countMapIterations(() => lockout.attempt('newcomer0', policy, clock.now()))
+    const second = await countMapIterations(() => lockout.attempt('newcomer1', policy, clock.now()))
+    clock.advance(60_000)
+    const after = await lockout.attempt('newcomer2', policy, clock.now())
+
+    expect(first.result.allowed).toBe(false)
+    expect(first.steps).toBeGreaterThan(0)
+    expect(second.result.allowed).toBe(false)
+    expect(second.steps).toBe(0)
+    expect(after.allowed).toBe(true)
+  })
+
   describe('at the cap, an insert does bounded work', () => {
     const KEYS = 5_000
     /** Far below the size of the map, far above what a bounded look at its front needs. */

@@ -79,6 +79,44 @@ describe('MemoryRateLimiter', () => {
     expect((await limiter.hit('newcomer', 1, 1_000)).allowed).toBe(true)
   })
 
+  test('a run of buckets at their limit at the front does not hide the buckets behind it', async () => {
+    const clock = new FixedClock()
+    const limiter = new MemoryRateLimiter(clock, { maxKeys: 500 })
+    for (let n = 0; n < 100; n++) {
+      await limiter.hit(`full${n}`, 1, 3_600_000)
+    }
+    for (let n = 0; n < 400; n++) {
+      await limiter.hit(`open${n}`, 5, 3_600_000)
+    }
+
+    // An insert looks at 64 buckets, all at their limit, and refuses; they move to the back.
+    const refused = await limiter.hit('newcomer0', 5, 3_600_000)
+    // The next one starts past them, finds a bucket below its limit and evicts it.
+    const accepted = await limiter.hit('newcomer1', 5, 3_600_000)
+
+    expect(refused.allowed).toBe(false)
+    expect(accepted.allowed).toBe(true)
+  })
+
+  test('when every bucket is at its limit and the map is small, refusals until one ends cost no scan', async () => {
+    const clock = new FixedClock()
+    const limiter = new MemoryRateLimiter(clock, { maxKeys: 50 })
+    for (let n = 0; n < 50; n++) {
+      await limiter.hit(`full${n}`, 1, 3_600_000)
+    }
+
+    const first = await countMapIterations(() => limiter.hit('newcomer0', 1, 3_600_000))
+    const second = await countMapIterations(() => limiter.hit('newcomer1', 1, 3_600_000))
+    clock.advance(3_600_000)
+    const after = await limiter.hit('newcomer2', 1, 3_600_000)
+
+    expect(first.result.allowed).toBe(false)
+    expect(first.steps).toBeGreaterThan(0)
+    expect(second.result.allowed).toBe(false)
+    expect(second.steps).toBe(0)
+    expect(after.allowed).toBe(true)
+  })
+
   describe('at the cap, an insert does bounded work', () => {
     const KEYS = 5_000
     const BOUND = 300

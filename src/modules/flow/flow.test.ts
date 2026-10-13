@@ -6,6 +6,7 @@ import { createApp } from '~/app'
 import { AUTH_ERRORS } from '~/errors'
 import { type ConcurrencyLimiter, Saturated } from '~/lib/concurrency'
 import * as Bootstrap from '~/modules/bootstrap/service'
+import { ORPHAN_REPORT_WINDOW_MS, reportOrphan } from '~/modules/flow/service'
 import * as Retention from '~/modules/retention/service'
 import { createReadyDeps } from '~/testing'
 import { at, call, emailedCode, text, wrongCode } from '~/testing/client'
@@ -958,6 +959,48 @@ describe('an Organization that core made and nobody owns', () => {
     expect(reconcileReports(deps)).toHaveLength(2)
   })
 
+  describe('the report to the tracker', () => {
+    const orphan = { organizationId: 'org_1', userId: 'usr_1', attemptId: 'att_1', why: 'test' }
+    function tracked() {
+      const reports: unknown[] = []
+      const context = {
+        client: 'ios' as const,
+        report: (error: unknown) => void reports.push(error),
+      }
+      return { reports, context }
+    }
+
+    test('is made again once the window has passed, and not before', async () => {
+      const { deps } = await setup()
+      const { reports, context } = tracked()
+
+      await reportOrphan(deps, context, 500, orphan)
+      deps.clock.advance('59m')
+      await reportOrphan(deps, context, 500, orphan)
+      expect(reports).toHaveLength(1)
+
+      deps.clock.advance('2m')
+      await reportOrphan(deps, context, 500, orphan)
+      expect(reports).toHaveLength(2)
+    })
+
+    test('is suppressed when the limiter map is full, but the orphan is still logged with its ids', async () => {
+      const { deps } = await setup()
+      const { reports, context } = tracked()
+      deps.rateLimiter = new MemoryRateLimiter(deps.clock, { maxKeys: 1 })
+      await deps.rateLimiter.hit('filler', 1, ORPHAN_REPORT_WINDOW_MS)
+      const before = deps.logLines.length
+
+      await reportOrphan(deps, context, 500, orphan)
+      await reportOrphan(deps, context, 500, orphan)
+
+      expect(reports).toHaveLength(0)
+      const lines = deps.logLines.slice(before).join('\n')
+      expect(lines.split('an Organization has no owner')).toHaveLength(3)
+      expect(lines).toContain('org_1')
+    })
+  })
+
   test('an attempt that expires while core is answering is not purged out from under the sign-up', async () => {
     const { deps, signUp, verify, nextEmail } = await setup()
     const email = nextEmail()
@@ -1192,7 +1235,8 @@ describe('what the per-process counters allow while they are full', () => {
   test('KNOWN LIMITATION: with every send bucket at its limit, a sign-up for a new address is refused', async () => {
     // The rate limiter never evicts a bucket at its limit (that would grant more sends), so a
     // flood that fills the cap with such buckets denies sign-up to addresses nobody has used.
-    // Fixed by moving the counters to Postgres (hub issue 30); this pins the behaviour.
+    // Fixed by moving the counters to Postgres (hub issue 30); this pins the behaviour. The
+    // 1-hour buckets exist only to hold the cap: the real cooldown bucket lasts 60 s.
     const { deps, signUp } = await setup()
     deps.rateLimiter = new MemoryRateLimiter(deps.clock, { maxKeys: 50 })
     for (let n = 0; n < 25; n++) {

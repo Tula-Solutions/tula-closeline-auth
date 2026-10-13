@@ -146,6 +146,7 @@ export class MemoryLockout implements Lockout {
     }
     if (skipped.length >= this.#entries.size) {
       // Every key is locked: remember until when, so inserts until then cost nothing.
+      // Only reachable when the map holds at most SCAN_LIMIT keys; a larger map never looks at all.
       this.#fullUntil = soonestUnlock
     }
     return Math.max(1, soonestUnlock - time)

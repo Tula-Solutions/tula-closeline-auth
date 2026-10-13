@@ -15,12 +15,12 @@ export type RetentionDeps = Pick<
 >
 
 /**
- * How long past its expiry an attempt or code is kept: the time core is given to answer. A
- * sign-up that checked its code just before expiry is still waiting on core and writes its
+ * How long past its expiry an attempt or code is kept: twice the time core is given to answer.
+ * A sign-up that checked its code just before expiry is still waiting on core and writes its
  * account and spends the code afterwards, so a purge that ran in between would turn a sign-up
- * that worked into a 409.
+ * that worked into a 409. The second timeout is slack for the writes that follow core's answer.
  */
-export const PURGE_GRACE_MS = MEMBERSHIP_TIMEOUT_MS
+export const PURGE_GRACE_MS = 2 * MEMBERSHIP_TIMEOUT_MS
 
 /** How many rows one purge removed, by kind. */
 export type PurgeResult = { attempts: number; tokens: number }

@@ -22,9 +22,8 @@ Other scripts are in `package.json`.
 ## Where this came from
 
 Ported from the source product `tula-auth-and-user-management` (`apps/api`, `packages/contract`,
-`conformance/`), read only. Ticket 1.7 named commit `46d13ba`; the checkout it was ported from was
-at `55e32edc` (46d13ba is an ancestor; the later commits touch proposals, the session admin
-router, OAuth, the user service and migration 0035, none of which are in scope). Ported as-is
+`conformance/`), read only. Ticket 1.7 named commit `46d13ba`; it was ported from `55e32edc` (a
+descendant; the later commits touch only out-of-scope areas). Ported as-is
 (rename of `TULA_MASTER_KEY` to `AUTH_MASTER_KEY` only): secret box, keyed hash, crypto and email
 helpers, the password rule engine, lockout policy, flow-attempt, verification-code and refresh
 logic. Adapted: ids and tenancy (`withEnvironment`, one fixed project), errors (the contract's
@@ -95,8 +94,9 @@ create an Organization for a sign-up whose account is never written: the insert 
 to another sign-up (409 `flow.invalid_step`), the insert fails for another reason (500), the
 process dies between core and the insert, or the attempt expires before a retry (a new attempt has
 a new key, so a second Organization). The first two are reported through `reportError` with the
-Organization, user and attempt ids and no address, once per attempt per hour (always logged).
-A burned invitation is the same. A timed-out call to core is not reported with an Organization
+Organization, user and attempt ids and no address, once per attempt per hour. An orphan is always
+logged with ids, even when the report is suppressed or the limiter map is full. A burned
+invitation is the same. A timed-out call to core is not reported with an Organization
 id (none is known); a retry with the same key converges. Auth does not clean these up; core or a
 reconciliation job must find Organizations whose owner never signed in.
 
@@ -106,19 +106,18 @@ no session and no token.
 
 ## Retention
 
-Sign-in data is short-lived: an attempt lives 10
-minutes and a code 10 minutes, and an abandoned sign-up holds an argon2id hash, the Organization
-name and a sealed invitation, so they must not be kept. `modules/retention` deletes attempts (and,
-by cascade, their codes) and then codes whose `expiresAt` has passed, `RETENTION_BATCH_SIZE` rows
-per statement, repeating while a batch comes back full. It runs at boot (not awaited) and every
-`RETENTION_INTERVAL_MS`, each run under a Postgres advisory lock (`ExclusiveRunner`, so only one
-instance purges at a time and the others skip) and bounded by `RETENTION_RUN_TIMEOUT_MS`. A failed
-or timed-out run is logged and reported to the error tracker (no row data) and the next interval
-tries again. Only rows expired for more than 5 s (the bound on a call to core) are purged, so a
-sign-up that is waiting on core is never purged before it spends its code. It needs 2 connections
-at once, so `DB_POOL_MAX` is at least 4. Shutdown stops it
-before the pool closes. Sessions, refresh tokens and signing keys are not purged by this service
-yet.
+Sign-in data is short-lived (an attempt and a code live 10 minutes), and an abandoned sign-up
+holds an argon2id hash, the Organization name and a sealed invitation, so they must not be kept.
+`modules/retention` deletes attempts (and, by cascade, their codes) and then codes whose `expiresAt`
+has passed, `RETENTION_BATCH_SIZE` rows per statement, repeating while a batch comes back full. It
+runs at boot (not awaited) and every `RETENTION_INTERVAL_MS`, each run under a Postgres advisory
+lock (`ExclusiveRunner`, so only one instance purges at a time and the others skip) and bounded by
+`RETENTION_RUN_TIMEOUT_MS`. A failed or timed-out run is logged and reported to the error tracker
+(no row data) and the next interval tries again. Only rows expired for more than 10 s (twice the
+5 s bound on a call to core) are purged, so a sign-up that is waiting on core is never purged
+before it spends its code. It needs 2 connections at once, so `DB_POOL_MAX` is at least 4.
+Shutdown stops it before the pool closes. Sessions, refresh tokens and signing keys are not purged
+by this service yet.
 
 ## Env keys (`src/env.ts`, mirrored in `.env.example`)
 
@@ -147,13 +146,15 @@ scenarios against real Postgres as the `closeline_auth` role (`POSTGRES_PORT` mo
   `tula-closeline-db` release (a separate ticket, hub issue 30). Until then both maps are capped
   at 50,000 keys. At the cap an insert looks at the front of the map only (64 keys, so it costs a
   bounded amount): the oldest key that is not locked or at its limit goes; a locked key is never
-  evicted, and if the keys looked at are all locked a new key is refused (fails closed).
+  evicted, and if the keys looked at are all locked a new key is refused (fails closed) and they
+  move to the back: refusals of a new key are bounded by the locked keys divided by 64.
 - **Known limitations of the per-process cap (go away with hub issue 30; pinned by tests named
   KNOWN LIMITATION).** Churn resets lockout: a key below its lockout is evicted after about
   50,000 newer keys, so 5 guesses per roughly 100,000 cheap requests is possible. Filling the cap
-  with locked keys (about 1,000 requests a second for 20 minutes) refuses sign-in for new
-  addresses, and with send buckets at their limit (about 70 requests a second) refuses sign-up
-  for new addresses. The per-source limit at the edge (below) is what makes both expensive.
+  with locked keys (5 tries each: about 1,000 requests a second for 20 minutes) refuses sign-in
+  for new addresses. Sends are counted only after a hash slot is held and the cooldown lasts 60 s,
+  so 50,000 buckets at their limit need about 830 admitted hashes a second, far above the hash
+  lane's defaults. The edge limit (below) makes both expensive.
 - **A stranger can lock a victim out of password sign-in.** Lockout is keyed by address and counted
   up front, so about 11 wrong tries on someone's address (then one every 15 minutes) keep their
   correct password refused (429 `rate.limited`) until the failures are forgotten after an hour of

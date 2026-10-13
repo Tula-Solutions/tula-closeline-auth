@@ -131,6 +131,7 @@ export class MemoryRateLimiter implements RateLimiter {
     }
     if (skipped.length >= this.#windows.size) {
       // Every bucket is at its limit: remember until when, so inserts until then cost nothing.
+      // Only reachable when the map holds at most SCAN_LIMIT keys; a larger map never looks at all.
       this.#fullUntil = soonestEnd
     }
     return Math.max(1, soonestEnd - now)

@@ -270,15 +270,15 @@ async function bestEffort(
 }
 
 /** The longest the tracker is told about one attempt's unowned Organization: once an hour. */
-const ORPHAN_REPORT_WINDOW_MS = durationToMs('1h')
+export const ORPHAN_REPORT_WINDOW_MS = durationToMs('1h')
 
 /**
  * Tells the deployment that core made an Organization for a sign-up whose account was not written
  * (ids only, never an address), so it can be reconciled (ticket 1.9). Logged every time, reported
  * to the tracker once per attempt per hour, so that retries of one attempt, or attempts made on
- * purpose, cannot flood it. It never throws.
+ * purpose, cannot flood it. It never throws. Exported for its tests.
  */
-async function reportOrphan(
+export async function reportOrphan(
   deps: Pick<Container, 'logger' | 'rateLimiter'>,
   context: ClientContext,
   status: number,
