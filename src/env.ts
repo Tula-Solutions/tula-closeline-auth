@@ -25,6 +25,24 @@ function localMailboxOrigin(value: string): string | undefined {
   return `http://${(match[1] ?? '').toLowerCase()}${port === undefined ? '' : `:${port}`}`
 }
 
+/** The most origins `SESSION_ALLOWED_ORIGINS` may list. */
+const MAX_ALLOWED_ORIGINS = 20
+
+/** The entries of `SESSION_ALLOWED_ORIGINS`, split and trimmed, not yet checked. */
+function splitOrigins(value: string): string[] {
+  return value.split(',').map((entry) => entry.trim())
+}
+
+/** Whether `entry` is an exact origin (scheme, lower-case host, optional non-default port). */
+function isExactOrigin(entry: string, allowHttp: boolean): boolean {
+  if (entry.includes('*') || !URL.canParse(entry)) {
+    return false
+  }
+  const url = new URL(entry)
+  const schemeOk = url.protocol === 'https:' || (allowHttp && url.protocol === 'http:')
+  return schemeOk && url.origin === entry
+}
+
 const schema = z
   .object({
     /** Which deployment this is. No default: a deploy that forgets it must fail at boot. */
@@ -124,6 +142,17 @@ const schema = z
     MAIL_LOCAL_URL: z.string().optional(),
     /** The `From` address of local mail. Accepted only when `ENVIRONMENT=local`. */
     MAIL_LOCAL_FROM: z.email().optional(),
+    /**
+     * Only for local development over plain http: `true` drops `Secure` and the `__Secure-`
+     * prefix from the refresh cookie. Refused in every other environment. Default `false`.
+     */
+    SESSION_COOKIE_INSECURE: z.enum(['true', 'false']).optional(),
+    /**
+     * The origins the portal is served from: a comma-separated list of exact origins (at most
+     * 20), `https` outside `local`, no wildcard, path or trailing slash. A browser-client
+     * refresh or sign-out must carry an `Origin` in this list. Unset: every such request is refused.
+     */
+    SESSION_ALLOWED_ORIGINS: z.string().optional(),
   })
   .superRefine((env, ctx) => {
     // Messages name the key and the rule, never the value: a URL can carry credentials.
@@ -133,6 +162,27 @@ const schema = z
           code: 'custom',
           path: [key],
           message: `${key} is accepted only when ENVIRONMENT is local`,
+        })
+      }
+    }
+    if (env.SESSION_COOKIE_INSECURE === 'true' && env.ENVIRONMENT !== 'local') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['SESSION_COOKIE_INSECURE'],
+        message: 'SESSION_COOKIE_INSECURE=true is accepted only when ENVIRONMENT is local',
+      })
+    }
+    if (env.SESSION_ALLOWED_ORIGINS !== undefined) {
+      const entries = splitOrigins(env.SESSION_ALLOWED_ORIGINS)
+      const allowHttp = env.ENVIRONMENT === 'local'
+      if (
+        entries.length > MAX_ALLOWED_ORIGINS ||
+        !entries.every((entry) => isExactOrigin(entry, allowHttp))
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['SESSION_ALLOWED_ORIGINS'],
+          message: `SESSION_ALLOWED_ORIGINS must list at most ${MAX_ALLOWED_ORIGINS} exact origins, comma-separated, each like https://host[:port] with a lower-case host, no wildcard, path or trailing slash (http only when ENVIRONMENT is local)`,
         })
       }
     }
@@ -228,4 +278,14 @@ export function masterKey(env: Env): string {
 /** The issuer of every token: the configured URL, or this machine's address in `local`. */
 export function publicUrl(env: Env): string {
   return (env.PUBLIC_URL ?? `http://localhost:${env.PORT}`).replace(/\/+$/, '')
+}
+
+/** Whether the refresh cookie drops `Secure` and its prefix (`local` only, validated at boot). */
+export function sessionCookieInsecure(env: Env): boolean {
+  return env.SESSION_COOKIE_INSECURE === 'true'
+}
+
+/** The origins allowed to call the cookie-authenticated routes; empty when none is configured. */
+export function allowedOrigins(env: Env): readonly string[] {
+  return env.SESSION_ALLOWED_ORIGINS === undefined ? [] : splitOrigins(env.SESSION_ALLOWED_ORIGINS)
 }
