@@ -54,7 +54,11 @@ const ok = {
             'Client type `browser`, on the response that completes the attempt only: the refresh ' +
             'cookie `__Secure-tula_refresh` (`tula_refresh` in local development with ' +
             '`SESSION_COOKIE_INSECURE`), `Path=/v1/client/sessions/; Max-Age=<remaining session ' +
-            'lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`.',
+            'lifetime>; HttpOnly; Secure; SameSite=Strict`, no `Domain`. A completed sign-in also ' +
+            'sets the known-device cookie `__Secure-tula_known_device` (`tula_known_device` in ' +
+            'local development with `SESSION_COOKIE_INSECURE`), `Path=/v1/client/sign-ins; ' +
+            'Max-Age=7776000; HttpOnly; Secure; SameSite=Strict`, no `Domain`: a signed value ' +
+            'that lets this device sign in to this account while others guess at its address.',
         }),
     }),
     content: {
@@ -162,7 +166,10 @@ const password = createRoute({
   description:
     'Completes the sign-in with tokens. An account with no Organization is refused with ' +
     '`auth.no_organization`, and one whose Organization was deleted with `organization.deleted`; ' +
-    'neither gets a session. If the core service cannot answer, the answer is 503 ' +
+    'neither gets a session. Wrong passwords are counted per address (about 11, then one every 15 ' +
+    'minutes) and refused with 429 `rate.limited` and `Retry-After`, except from a device that holds ' +
+    'a valid known-device cookie for the account (set by an earlier sign-in), which has a counter ' +
+    'of its own. If the core service cannot answer, the answer is 503 ' +
     '`membership.unavailable` with `Retry-After`: nothing is counted against the account and ' +
     'the same attempt can be submitted again.',
   request: { params: idParams, headers: attemptHeaders, body: json(passwordRequestSchema) },
@@ -205,15 +212,19 @@ function shaped(
   context: Flow.ClientContext,
   result: Flow.FlowResult
 ) {
-  const { session } = result
+  // The device cookie is a header, never part of the body.
+  const { session, deviceCookie, ...body } = result
   if (session === undefined) {
-    return result
+    return body
   }
   if (!context.cookie) {
-    return { ...result, session: Sessions.bodyOf(session) }
+    return { ...body, session: Sessions.bodyOf(session) }
   }
   c.header('Set-Cookie', setRefreshCookie(container.env, session, container.clock.now()))
-  return { ...result, session: Sessions.browserBodyOf(session) }
+  if (deviceCookie !== undefined) {
+    c.header('Set-Cookie', deviceCookie, { append: true })
+  }
+  return { ...body, session: Sessions.browserBodyOf(session) }
 }
 
 /** Sign-up, sign-in and the password policy. */

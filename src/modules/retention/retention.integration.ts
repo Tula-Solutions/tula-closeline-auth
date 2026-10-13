@@ -62,7 +62,7 @@ describe('retention against a real Postgres', () => {
 
     const result = await Retention.purgeExpired(bounded, tenant)
 
-    expect(result).toEqual({ attempts: 12, tokens: 7 })
+    expect(result).toEqual({ attempts: 12, tokens: 7, counters: 0 })
     expect(Math.max(...removed)).toBeLessThanOrEqual(5)
     expect(await count('flow_attempts')).toBe(9)
     expect(await count('verification_tokens')).toBe(2)

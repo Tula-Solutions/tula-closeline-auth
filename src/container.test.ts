@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { formatId } from 'tula-closeline-contract'
+import { MemoryLockout } from '~/adapters/memory/lockout'
+import { MemoryRateLimiter } from '~/adapters/memory/rate-limiter'
 import { MailerNotConfigured } from '~/adapters/unconfigured/mailer'
 import { startFakeCore } from '~/testing/fake-core'
 import { createContainer, createMailer, createMembership, reportSafely } from './container'
@@ -124,6 +126,29 @@ test('a container built from the environment checks the database and the bootstr
   const container = createContainer(loadEnv({ ENVIRONMENT: 'local', REGION: 'us' }))
 
   expect(container.readinessChecks.map((check) => check.name)).toEqual(['database', 'bootstrap'])
+})
+
+describe('where the counters live', () => {
+  test('the container counts sign-in tries and rate limits in the database, not in process memory', () => {
+    const container = createContainer(loadEnv({ ENVIRONMENT: 'local', REGION: 'us' }))
+
+    expect(container.lockout).not.toBeInstanceOf(MemoryLockout)
+    expect(container.rateLimiter).not.toBeInstanceOf(MemoryRateLimiter)
+    expect(container.counterPurger).toBeDefined()
+  })
+
+  test('before the fixed project is bootstrapped a count fails instead of being allowed', async () => {
+    const container = createContainer(loadEnv({ ENVIRONMENT: 'local', REGION: 'us' }))
+
+    await expect(container.rateLimiter.hit('k', 1, 1_000)).rejects.toThrow('not bootstrapped')
+    await expect(
+      container.lockout.attempt(
+        'k',
+        { freeAttempts: 1, baseDelayMs: 1, maxDelayMs: 1, forgetAfterMs: 1 },
+        new Date()
+      )
+    ).rejects.toThrow('not bootstrapped')
+  })
 })
 
 describe('which membership adapter the container builds', () => {
@@ -355,6 +380,8 @@ describe('turning off certificate checks (ADR 0013)', () => {
     CORE_BASE_URL: 'https://core.eu.internal.example.com',
     CORE_INTERNAL_TOKEN: 'c'.repeat(32),
     SESSION_ALLOWED_ORIGINS: 'https://app.example.com',
+    COUNTER_HASH_KEY: 'h'.repeat(40),
+    DEVICE_COOKIE_KEY: 'd'.repeat(40),
   }
 
   /** Runs `run` with `NODE_TLS_REJECT_UNAUTHORIZED=0` set, and puts the old value back. */

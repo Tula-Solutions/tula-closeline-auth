@@ -494,10 +494,9 @@ describe('sign-in', () => {
     }
   })
 
-  test('KNOWN LIMITATION: anyone can lock a victim out of password sign-in by guessing wrong on their address', async () => {
-    // Lockout is keyed by address and counted up front, so wrong tries by a stranger lock the
-    // account's owner out too. Inherited from the source design; a follow-up ticket decides the
-    // redesign. This test pins the behaviour so a change to it is a decision, not an accident.
+  test('a device with no known-device cookie is locked out by a stranger guessing wrong on the address (ADR 0014)', async () => {
+    // Lockout stays keyed by address and counted up front for devices the account has not signed
+    // in from; a device that has is exempt (known-device.suite.ts). This pins the first half.
     const { app, signedUp } = await setup()
     const { email } = await signedUp()
     for (let n = 0; n < 7; n++) {

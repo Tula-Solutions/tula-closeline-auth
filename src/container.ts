@@ -11,9 +11,12 @@ import {
 import { HibpBreachChecker } from '~/adapters/breach/hibp'
 import { createHttpMembership } from '~/adapters/http/membership'
 import { createMailpitMailer, DEFAULT_LOCAL_MAIL_FROM } from '~/adapters/mailpit/mailer'
-import { MemoryLockout } from '~/adapters/memory/lockout'
-import { MemoryRateLimiter } from '~/adapters/memory/rate-limiter'
 import { createPlaceholderMembership } from '~/adapters/placeholder/membership'
+import {
+  createPostgresCounterPurger,
+  createPostgresLockout,
+  createPostgresRateLimiter,
+} from '~/adapters/postgres/counters'
 import { createPostgresExclusiveRunner } from '~/adapters/postgres/exclusive-runner'
 import { createPostgresFixedProject } from '~/adapters/postgres/fixed-project'
 import { PostgresFlowAttemptStore } from '~/adapters/postgres/flow-attempts'
@@ -24,12 +27,13 @@ import { PostgresVerificationTokenStore } from '~/adapters/postgres/verification
 import { uuidV7Ids } from '~/adapters/system/ids'
 import { createUnconfiguredMailer } from '~/adapters/unconfigured/mailer'
 import { describeError } from '~/describe-error'
-import { databaseUrl, type Env, loadEnv, masterKey } from '~/env'
+import { counterHashKey, databaseUrl, type Env, loadEnv, masterKey } from '~/env'
 import { SERVICE } from '~/info'
 import { createWorkLimits, type WorkLimits } from '~/lib/concurrency'
 import { createKeyedHash, type KeyedHash } from '~/lib/keyed-hash'
 import { createSecretBox, type SecretBox } from '~/lib/secret-box'
 import type { BreachChecker } from '~/ports/breach-checker'
+import type { CounterPurger } from '~/ports/counter-purger'
 import type { ExclusiveRunner } from '~/ports/exclusive-runner'
 import type { FixedProject, Tenant } from '~/ports/fixed-project'
 import type { FlowAttemptStore } from '~/ports/flow-attempt-store'
@@ -102,10 +106,12 @@ export type Container = {
   sessions: SessionStore
   /** Sends the verification emails. */
   mailer: Mailer
-  /** Per-key request limits (per process until a shared store exists; see the README). */
+  /** Per-key request limits, counted in Postgres so every instance shares them (ADR 0014). */
   rateLimiter: RateLimiter
-  /** Backs off repeated wrong passwords per identifier (per process, as above). */
+  /** Backs off repeated wrong passwords per address and per known device, counted in Postgres. */
   lockout: Lockout
+  /** Removes expired lockout and rate-limit counters, in bounded batches. */
+  counterPurger: CounterPurger
   /** Lets work that must not run on two instances at once take turns (the purge). */
   exclusive: ExclusiveRunner
   /** Bounds on password hashing and the breach lookup, so one instance cannot be flooded. */
@@ -199,6 +205,17 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     onError: (error) => logger.error('database connection error', { error: describeError(error) }),
   })
   const tenant: Container['tenant'] = {}
+  // The counters are hashed with their own key; the environment is known once bootstrapping ran.
+  const counters = {
+    db: database.db,
+    key: counterHashKey(env),
+    environmentId: () => {
+      if (!tenant.current) {
+        throw new Error('the fixed project is not bootstrapped')
+      }
+      return tenant.current.environmentId
+    },
+  }
 
   return {
     env,
@@ -235,8 +252,9 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     // The production mail provider is still undecided (hub issue #35): outside a local mailbox,
     // sending fails with `mail.unavailable`.
     mailer: createMailer(env, logger),
-    rateLimiter: new MemoryRateLimiter(systemClock),
-    lockout: new MemoryLockout(systemClock),
+    rateLimiter: createPostgresRateLimiter(counters),
+    lockout: createPostgresLockout(counters),
+    counterPurger: createPostgresCounterPurger(database.db),
     exclusive: createPostgresExclusiveRunner(database.db),
     limits: createWorkLimits(env),
     breachChecker: new HibpBreachChecker({ logger }),

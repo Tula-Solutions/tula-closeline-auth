@@ -94,9 +94,13 @@ describe('the browser client type sets the refresh token in a cookie', () => {
     const reply = await signIn()
 
     expect(reply.status).toBe(200)
-    expect(reply.headers.getSetCookie()).toEqual([
-      `${NAME}=${tokenOf(reply.headers)}; Path=${PATH}; Max-Age=${ABSOLUTE_SECONDS}; HttpOnly; Secure; SameSite=Strict`,
-    ])
+    // The refresh cookie, then the known-device cookie (ADR 0014), which has its own tests.
+    const [refreshLine, deviceLine, ...others] = reply.headers.getSetCookie()
+    expect(refreshLine).toBe(
+      `${NAME}=${tokenOf(reply.headers)}; Path=${PATH}; Max-Age=${ABSOLUTE_SECONDS}; HttpOnly; Secure; SameSite=Strict`
+    )
+    expect(deviceLine).toStartWith('__Secure-tula_known_device=')
+    expect(others).toEqual([])
     expect(reply.headers.get('cache-control')).toBe('no-store')
     expect(at(reply.body, 'session.refreshToken')).toBeUndefined()
     expect(text(reply.body, 'session.accessToken').length).toBeGreaterThan(20)
@@ -712,7 +716,8 @@ describe('no-store on every response that sets or clears the cookie', () => {
     ]
 
     for (const reply of replies) {
-      expect(reply.headers.getSetCookie()).toHaveLength(1)
+      // One cookie, or two on a sign-in (the refresh cookie and the known-device cookie).
+      expect(reply.headers.getSetCookie()).toHaveLength(reply === replies[1] ? 2 : 1)
       expect(reply.headers.get('cache-control')).toBe('no-store')
     }
   })

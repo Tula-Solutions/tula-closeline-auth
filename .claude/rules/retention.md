@@ -15,5 +15,5 @@ lock (`ExclusiveRunner`, so only one instance purges at a time and the others sk
 (no row data) and the next interval tries again. Only rows expired for more than 10 s (twice the
 5 s bound on a call to core) are purged, so a sign-up that is waiting on core is never purged
 before it spends its code. It needs 2 connections at once, so `DB_POOL_MAX` is at least 4.
-Shutdown stops it before the pool closes. Sessions, refresh tokens and signing keys are not purged
+Each run then purges expired lockout and rate-limit counters (`rules/lockout.md`). Shutdown stops it before the pool closes. Sessions, refresh tokens and signing keys are not purged
 by this service yet.

@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import { type Container, reportSafely } from '~/container'
 import type { AppEnv } from '~/http/types'
+import { readDeviceCookie } from '~/modules/flow/device-cookie'
 import { CLIENT_HEADER, clientHeaderSchema } from '~/modules/flow/schema'
 import type { ClientContext } from '~/modules/flow/service'
 
@@ -22,6 +23,8 @@ export function clientContext(container: Container, c: Context<AppEnv>): ClientC
     // A browser session is recorded as `web`; `browser` only selects the cookie transport.
     client: header === 'browser' ? 'web' : header,
     cookie: header === 'browser',
+    knownDevice: () =>
+      readDeviceCookie(container.env, c.req.header('cookie'), container.clock.now()),
     report: (error, status) =>
       reportSafely(container, error, {
         requestId: c.get('requestId'),
