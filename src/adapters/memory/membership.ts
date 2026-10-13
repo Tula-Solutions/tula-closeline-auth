@@ -1,7 +1,8 @@
-import { formatId, type Role, type UserId } from 'tula-closeline-contract'
+import { formatId, type OrganizationStatus, type Role, type UserId } from 'tula-closeline-contract'
 import {
   type Membership,
   type MembershipClaims,
+  type MembershipLookup,
   MembershipRefused,
   MembershipUnavailable,
 } from '~/ports/membership'
@@ -12,6 +13,8 @@ export type MemoryMembership = MembershipClaims & {
   invite: (token: string, invitation: { email: string; organizationId: string; role: Role }) => void
   /** Make every following call fail as unavailable (`true`) or work again (`false`). */
   breakDown: (broken: boolean) => void
+  /** Set the status of an Organization: the lookups of its members report it (default `active`). */
+  setOrganizationStatus: (organizationId: string, status: OrganizationStatus) => void
   /** Make the next `forUser` for this user answer none, as if the account had no membership. */
   forget: (userId: UserId) => void
   /**
@@ -31,6 +34,7 @@ export function createMemoryMembership(): MemoryMembership {
   const byKey = new Map<string, Membership>()
   const invitations = new Map<string, { email: string; organizationId: string; role: Role }>()
   const organizations: MemoryMembership['organizations'] = []
+  const statuses = new Map<string, OrganizationStatus>()
   const calls = { create: 0, accept: 0, lookup: 0, aborted: 0 }
   let broken = false
   const guard = () => {
@@ -78,6 +82,7 @@ export function createMemoryMembership(): MemoryMembership {
     breakDown: (value) => {
       broken = value
     },
+    setOrganizationStatus: (organizationId, status) => void statuses.set(organizationId, status),
     forget: (userId) => void members.delete(userId),
     async createOrganization({ userId, name, idempotencyKey, signal }) {
       calls.create += 1
@@ -124,7 +129,15 @@ export function createMemoryMembership(): MemoryMembership {
         calls.aborted += 1
         throw new MembershipUnavailable('the call was aborted')
       }
-      return members.get(userId) ?? null
+      const membership = members.get(userId)
+      if (!membership) {
+        return null
+      }
+      const lookup: MembershipLookup = {
+        ...membership,
+        organizationStatus: statuses.get(membership.organizationId) ?? 'active',
+      }
+      return lookup
     },
   }
 }

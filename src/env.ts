@@ -49,6 +49,13 @@ const schema = z
     BREACH_CHECK_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(8),
     /** How many more may wait for a lookup slot; past that a request gets a 503 at once. */
     BREACH_CHECK_QUEUE: z.coerce.number().int().min(0).max(1_000).default(16),
+    /**
+     * The most requests to the core service in flight at once from this instance. A stalled core
+     * then holds this many sockets and no more.
+     */
+    CORE_CONCURRENCY: z.coerce.number().int().min(1).max(1_000).default(64),
+    /** How many more calls to core may wait for a slot; past that a call fails at once (503). */
+    CORE_QUEUE: z.coerce.number().int().min(0).max(10_000).default(256),
     /** The Region this deployment serves (ADR 0001); stamped into every token. No default. */
     REGION: regionSchema,
     /** The `closeline_auth` login. Defaults to the local compose database in `local` only. */
@@ -65,15 +72,66 @@ const schema = z
     PUBLIC_URL: z.url().optional(),
     /** The `aud` claim of every token; the verifiers of the other services expect it. */
     TOKEN_AUDIENCE: z.string().min(1).max(200).default('closeline'),
+    /**
+     * Where the core service's internal routes are: an origin, `https` outside `local`, with no
+     * credentials, query or fragment. Required outside `local`; in `local` with neither this nor
+     * the token set, a placeholder adapter is used and nobody can sign up.
+     */
+    CORE_BASE_URL: z
+      .url({ protocol: /^https?$/ })
+      .refine((value) => {
+        const url = new URL(value)
+        return url.username === '' && url.password === '' && url.search === '' && url.hash === ''
+      }, 'CORE_BASE_URL must not carry credentials, a query or a fragment')
+      .optional(),
+    /**
+     * The shared secret core expects as a bearer token on its internal routes: 32 to 512
+     * printable characters. Required outside `local`. Never logged.
+     */
+    CORE_INTERNAL_TOKEN: z
+      .string()
+      .min(32, 'CORE_INTERNAL_TOKEN must be at least 32 characters')
+      .max(512, 'CORE_INTERNAL_TOKEN must be at most 512 characters')
+      .regex(/^[\x21-\x7e]+$/, 'CORE_INTERNAL_TOKEN must be printable characters with no spaces')
+      .optional(),
   })
   .superRefine((env, ctx) => {
     if (env.ENVIRONMENT === 'local') {
+      // Both or neither: half a configuration would quietly fall back to the placeholder.
+      for (const [key, other] of [
+        ['CORE_BASE_URL', 'CORE_INTERNAL_TOKEN'],
+        ['CORE_INTERNAL_TOKEN', 'CORE_BASE_URL'],
+      ] as const) {
+        if (env[key] !== undefined && env[other] === undefined) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [other],
+            message: `${other} is required with ${key}`,
+          })
+        }
+      }
       return
     }
-    for (const key of ['DATABASE_URL', 'AUTH_MASTER_KEY', 'PUBLIC_URL'] as const) {
+    for (const key of [
+      'DATABASE_URL',
+      'AUTH_MASTER_KEY',
+      'PUBLIC_URL',
+      'CORE_BASE_URL',
+      'CORE_INTERNAL_TOKEN',
+    ] as const) {
       if (env[key] === undefined) {
         ctx.addIssue({ code: 'custom', path: [key], message: `${key} is required outside local` })
       }
+    }
+    if (
+      env.CORE_BASE_URL !== undefined &&
+      !env.CORE_BASE_URL.toLowerCase().startsWith('https://')
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['CORE_BASE_URL'],
+        message: 'CORE_BASE_URL must use https outside local',
+      })
     }
   })
   .refine((env) => env.SHUTDOWN_GRACE_MS + env.SHUTDOWN_TIMEOUT_MS <= MAX_SHUTDOWN_TOTAL_MS, {

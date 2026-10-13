@@ -36,7 +36,10 @@ const refresh = createRoute({
   summary: 'Refresh a session',
   description:
     'Trades a refresh token for new tokens. Each refresh token works once; presenting a spent ' +
-    'one after a short grace period ends the whole session (`session.reuse_detected`).',
+    'one after a short grace period ends the whole session (`session.reuse_detected`). If the ' +
+    'core service cannot answer, the answer is 503 `membership.unavailable` with `Retry-After` ' +
+    'and the refresh token is not spent: send the same one again. A user whose Organization ' +
+    'was deleted gets `organization.deleted` and the session ends.',
   request: { body },
   responses: {
     200: {
@@ -45,7 +48,8 @@ const refresh = createRoute({
     },
     401: errorResponse('The refresh token is invalid, the session ended, or it was reused.'),
     403: errorResponse('The account is banned or has no Organization.'),
-    503: errorResponse('The Organization membership service is unavailable.'),
+    410: errorResponse('The user\u2019s Organization was deleted; the session has ended.'),
+    503: errorResponse('The Organization membership service is unavailable; see `Retry-After`.'),
     500: errorResponse('Something went wrong on our side.'),
   },
 })

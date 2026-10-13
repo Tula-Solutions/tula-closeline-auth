@@ -1,6 +1,8 @@
-import { expect, test } from 'bun:test'
-import { createContainer, reportSafely } from './container'
-import { loadEnv } from './env'
+import { describe, expect, test } from 'bun:test'
+import { formatId } from 'tula-closeline-contract'
+import { startFakeCore } from '~/testing/fake-core'
+import { createContainer, createMembership, reportSafely } from './container'
+import { type Env, loadEnv } from './env'
 
 test('the default reportError logs the failure with its request context at error level', () => {
   const lines: string[] = []
@@ -121,4 +123,107 @@ test('a container built from the environment checks the database and the bootstr
   const container = createContainer(loadEnv({ ENVIRONMENT: 'local', REGION: 'us' }))
 
   expect(container.readinessChecks.map((check) => check.name)).toEqual(['database', 'bootstrap'])
+})
+
+describe('which membership adapter the container builds', () => {
+  const userId = formatId('usr', crypto.randomUUID())
+  const quiet = { warn: () => {} }
+
+  test('local without core settings runs on the placeholder: no membership, none can be made', async () => {
+    const membership = createMembership(loadEnv({ ENVIRONMENT: 'local', REGION: 'us' }), quiet)
+
+    expect(await membership.forUser(userId)).toBeNull()
+    await expect(
+      membership.createOrganization({ userId, name: 'A', idempotencyKey: crypto.randomUUID() })
+    ).rejects.toThrow(/placeholder/)
+  })
+
+  test('with core settings it talks to core, with the secret, and not to the placeholder', async () => {
+    const core = startFakeCore()
+    try {
+      const env = loadEnv({
+        ENVIRONMENT: 'local',
+        REGION: 'us',
+        CORE_BASE_URL: core.url,
+        CORE_INTERNAL_TOKEN: core.secret,
+      })
+
+      const created = await createMembership(env, quiet).createOrganization({
+        userId,
+        name: 'Northline',
+        idempotencyKey: crypto.randomUUID(),
+      })
+
+      expect(created.role).toBe('owner')
+      expect(core.requests[0]?.headers.authorization).toBe(`Bearer ${core.secret}`)
+    } finally {
+      await core.stop()
+    }
+  })
+
+  test('the limits on calls to core come from the settings', async () => {
+    const core = startFakeCore()
+    try {
+      const env = loadEnv({
+        ENVIRONMENT: 'local',
+        REGION: 'us',
+        CORE_BASE_URL: core.url,
+        CORE_INTERNAL_TOKEN: core.secret,
+        CORE_CONCURRENCY: '1',
+        CORE_QUEUE: '0',
+      })
+      const membership = createMembership(env, quiet)
+      core.script({ kind: 'hang' })
+      const controller = new AbortController()
+      const stalled = membership.forUser(userId, controller.signal)
+      await core.untilRequests(1)
+
+      await expect(membership.forUser(userId)).rejects.toThrow(/too many calls/)
+
+      expect(core.requests).toHaveLength(1)
+      controller.abort()
+      await expect(stalled).rejects.toThrow()
+    } finally {
+      await core.stop()
+    }
+  })
+
+  test('outside local the placeholder can never be chosen: loading the settings fails, and so does building from an env that slipped past', () => {
+    for (const environment of ['dev', 'staging', 'prod']) {
+      expect(() =>
+        loadEnv({
+          ENVIRONMENT: environment,
+          REGION: 'us',
+          DATABASE_URL: 'postgres://x:y@db/closeline',
+          AUTH_MASTER_KEY: 'ab'.repeat(32),
+          PUBLIC_URL: 'https://auth.example.com',
+        })
+      ).toThrow(/CORE_BASE_URL/)
+      const slipped = {
+        ...loadEnv({ ENVIRONMENT: 'local', REGION: 'us' }),
+        ENVIRONMENT: environment,
+      }
+      expect(() => createMembership(slipped as Env, quiet)).toThrow(/required outside local/)
+    }
+  })
+
+  test('the container built from a local env with core settings uses the HTTP adapter', async () => {
+    const core = startFakeCore()
+    try {
+      const container = createContainer(
+        loadEnv({
+          ENVIRONMENT: 'local',
+          REGION: 'us',
+          LOG_LEVEL: 'silent',
+          CORE_BASE_URL: core.url,
+          CORE_INTERNAL_TOKEN: core.secret,
+        })
+      )
+
+      expect(await container.membership.forUser(userId)).toBeNull()
+      expect(core.requests).toHaveLength(1)
+    } finally {
+      await core.stop()
+    }
+  })
 })

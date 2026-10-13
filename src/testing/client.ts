@@ -16,6 +16,7 @@ export type CallOptions = {
 export type Reply = {
   status: number
   body: unknown
+  headers: Headers
 }
 
 /** Calls the app in-process, as an HTTP client would. */
@@ -44,7 +45,11 @@ export async function call(
     ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
   })
   const text = await response.text()
-  return { status: response.status, body: text === '' ? null : JSON.parse(text) }
+  return {
+    status: response.status,
+    body: text === '' ? null : JSON.parse(text),
+    headers: response.headers,
+  }
 }
 
 /** The six-digit code in the most recent email sent to `to`; throws when there is none. */

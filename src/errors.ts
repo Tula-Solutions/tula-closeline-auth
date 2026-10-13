@@ -1,4 +1,10 @@
-import { defineErrors, ERRORS, type ErrorDefinition, SIGNUP_ERRORS } from 'tula-closeline-contract'
+import {
+  CORE_ERRORS,
+  defineErrors,
+  ERRORS,
+  type ErrorDefinition,
+  SIGNUP_ERRORS,
+} from 'tula-closeline-contract'
 import { AppError } from 'tula-closeline-kit'
 
 /** The service's own errors, as `area.reason` codes with their HTTP status and default message. */
@@ -32,6 +38,8 @@ export const AUTH_ERRORS = {
   // `auth.no_organization`, `signup.invitation_invalid`, `signup.organization_name_invalid` and
   // `membership.unavailable` come from the contract.
   ...SIGNUP_ERRORS,
+  // Core's own code, returned by sign-in and refresh when the user's Organization was deleted.
+  'organization.deleted': CORE_ERRORS['organization.deleted'],
   ...defineErrors('mail', {
     unavailable: { status: 503, message: 'The email could not be sent right now. Try again.' },
   }),
@@ -67,11 +75,18 @@ export function rateLimited(definition: ErrorDefinition, retryAfterMs: number): 
 }
 
 /**
+ * An error the error handler does not report to the tracker on its own, because it is either
+ * expected under load (shedding, an outage of core) or reported by the code that raised it, once,
+ * with the context that code has.
+ */
+export class Unreported extends AppError {}
+
+/**
  * The 503 an instance answers with when it is shedding load (a work limiter is full). It is its
  * own class so the error handler can tell it from a real fault: shedding is not reported to the
  * error tracker, or a flood would also flood the tracker.
  */
-export class Overloaded extends AppError {
+export class Overloaded extends Unreported {
   constructor() {
     super({
       code: ERRORS['server.unavailable'].code,
@@ -85,3 +100,52 @@ export class Overloaded extends AppError {
 
 /** Seconds a client is told to wait after a shed request. */
 export const OVERLOAD_RETRY_AFTER_SECONDS = 1
+
+/** Seconds a client is told to wait (`Retry-After`) when core could not answer. */
+export const MEMBERSHIP_RETRY_AFTER_SECONDS = 5
+
+/**
+ * The 503 `membership.unavailable` (with `Retry-After`) for a call to core that did not answer
+ * in time or failed. Nothing was issued, counted or rotated, so the client retries the same
+ * request. The error handler logs every one at warn with {@link MembershipOutage.causeClass} and
+ * reports only a deployment fault ({@link MembershipOutage.deploymentFault}, a rejected shared
+ * secret), at most once a minute per cause class: an outage hits every request, and a report each
+ * would drown the tracker in one fault.
+ */
+export class MembershipOutage extends Unreported {
+  /** The class name of what went wrong; a fixed word, never a message, so it is safe to log. */
+  readonly causeClass: string
+  /** Whether this will not clear by itself and the deployment must fix it. */
+  readonly deploymentFault: boolean
+
+  constructor(cause: unknown, deploymentFault: boolean) {
+    super({
+      code: AUTH_ERRORS['membership.unavailable'].code,
+      status: AUTH_ERRORS['membership.unavailable'].status,
+      message: AUTH_ERRORS['membership.unavailable'].message,
+      details: { retryAfter: MEMBERSHIP_RETRY_AFTER_SECONDS },
+      cause,
+    })
+    this.name = 'MembershipOutage'
+    this.causeClass = cause instanceof Error ? cause.name : 'unknown'
+    this.deploymentFault = deploymentFault
+  }
+}
+
+/**
+ * The 500 for a fault in core that retrying cannot clear (it says a brand new user is already a
+ * member). The sign-up flow reports it once per attempt, with ids, before throwing it, so the
+ * error handler does not report it again; the client sees the common internal error, with no
+ * `Retry-After`.
+ */
+export class MembershipFaulted extends Unreported {
+  constructor(cause: unknown) {
+    super({
+      code: ERRORS['server.internal'].code,
+      status: ERRORS['server.internal'].status,
+      message: ERRORS['server.internal'].message,
+      cause,
+    })
+    this.name = 'MembershipFaulted'
+  }
+}

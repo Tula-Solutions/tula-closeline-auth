@@ -16,6 +16,7 @@ membershipSuite('memory', () => {
         role: 'rep',
       }),
     breakDown: adapter.breakDown,
+    setStatus: adapter.setOrganizationStatus,
   }
 })
 

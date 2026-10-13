@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test'
+import { decodeJwt } from 'jose'
 import type { OrganizationId, UserId } from 'tula-closeline-contract'
 import { createStaticKeySet, createTokenVerifier } from 'tula-closeline-kit'
 import { createApp } from '~/app'
 import { publicUrl } from '~/env'
+import { sha256Hex } from '~/lib/crypto'
 import * as Bootstrap from '~/modules/bootstrap/service'
 import { jwksSchema } from '~/modules/jwks/schema'
 import * as Jwks from '~/modules/jwks/service'
@@ -194,6 +196,241 @@ describe('refreshing', () => {
 
     expect(down.status).toBe(503)
     expect(up.status).toBe(200)
+  })
+
+  test('a lost rotation race asks core once for the request, and the loser gets the same next token', async () => {
+    const { deps, refresh, refreshToken } = await setup()
+    const lookups = deps.membership.calls.lookup
+    const real = deps.membership.forUser
+    let asking = 0
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    // Both requests have read the token and are waiting on core before either rotates it.
+    deps.membership.forUser = async (userId, signal) => {
+      asking += 1
+      if (asking === 2) {
+        release()
+      }
+      await gate
+      return real(userId, signal)
+    }
+
+    const [one, two] = await Promise.all([refresh(refreshToken), refresh(refreshToken)])
+
+    expect([one.status, two.status]).toEqual([200, 200])
+    expect(text(one.body, 'refreshToken')).toBe(text(two.body, 'refreshToken'))
+    expect(deps.membership.calls.lookup - lookups).toBe(2)
+  })
+
+  test('a token spent beyond the grace period is reuse at once: no call to core, and an outage does not defer it', async () => {
+    const { deps, refresh, refreshToken, sessionId } = await setup()
+    await refresh(refreshToken)
+    deps.clock.advance(`${Math.ceil(REUSE_GRACE_MS / 1000) + 1}s`)
+    deps.membership.breakDown(true)
+    const lookups = deps.membership.calls.lookup
+
+    const replay = await refresh(refreshToken)
+
+    expect(replay.status).toBe(401)
+    expect(replay.body).toMatchObject({ error: { code: 'session.reuse_detected' } })
+    expect(deps.membership.calls.lookup).toBe(lookups)
+    const environmentId = deps.tenant.current?.environmentId ?? ''
+    expect((await deps.sessions.findById(environmentId, sessionId))?.revokeReason).toBe(
+      'reuse_detected'
+    )
+  })
+
+  test('an ended or expired session costs no call to core', async () => {
+    const { deps, refresh, refreshToken } = await setup()
+    deps.clock.advance('8d')
+    const lookups = deps.membership.calls.lookup
+
+    const reply = await refresh(refreshToken)
+
+    expect(reply.body).toMatchObject({ error: { code: 'session.expired' } })
+    expect(deps.membership.calls.lookup).toBe(lookups)
+  })
+
+  test('the clock is read again after core answers: the token and the rotation carry that time', async () => {
+    const { deps, refresh, refreshToken } = await setup()
+    const real = deps.membership.forUser
+    deps.membership.forUser = async (userId, signal) => {
+      deps.clock.advance('4s')
+      return real(userId, signal)
+    }
+
+    const reply = await refresh(refreshToken)
+
+    const after = deps.clock.now()
+    expect(reply.status).toBe(200)
+    expect(decodeJwt(text(reply.body, 'accessToken')).iat).toBe(Math.floor(after.getTime() / 1000))
+    const environmentId = deps.tenant.current?.environmentId ?? ''
+    const spent = await deps.sessions.findToken(environmentId, sha256Hex(refreshToken))
+    expect(spent?.token.usedAt?.getTime()).toBe(after.getTime())
+  })
+
+  test('a session revoked while core is being asked is refused on a replay inside the grace window', async () => {
+    const { deps, refresh, refreshToken, sessionId } = await setup()
+    await refresh(refreshToken)
+    deps.clock.advance('2s')
+    const environmentId = deps.tenant.current?.environmentId ?? ''
+    const real = deps.membership.forUser
+    deps.membership.forUser = async (userId, signal) => {
+      await deps.sessions.revoke(environmentId, sessionId, 'sign_out', deps.clock.now())
+      return real(userId, signal)
+    }
+
+    const replay = await refresh(refreshToken)
+
+    expect(replay.status).toBe(401)
+    expect(replay.body).toMatchObject({ error: { code: 'session.revoked' } })
+    expect(JSON.stringify(replay.body)).not.toContain('tula_rt_')
+    expect(JSON.stringify(replay.body)).not.toContain('accessToken')
+  })
+
+  test('a user banned while core is being asked is refused on a replay inside the grace window', async () => {
+    const { deps, refresh, refreshToken, sessionId } = await setup()
+    await refresh(refreshToken)
+    deps.clock.advance('2s')
+    const environmentId = deps.tenant.current?.environmentId ?? ''
+    const user = await deps.users.findByEmail(environmentId, 'maya@northline.app')
+    const real = deps.membership.forUser
+    deps.membership.forUser = async (userId, signal) => {
+      deps.users.ban(user?.id ?? '', deps.clock.now())
+      return real(userId, signal)
+    }
+
+    const replay = await refresh(refreshToken)
+
+    expect(replay.status).toBe(403)
+    expect(replay.body).toMatchObject({ error: { code: 'auth.user_banned' } })
+    expect((await deps.sessions.findById(environmentId, sessionId))?.revokeReason).toBe(
+      'user_banned'
+    )
+  })
+
+  test('a next token spent while core is being asked makes the replay reuse', async () => {
+    const { deps, refresh, refreshToken, sessionId } = await setup()
+    const first = await refresh(refreshToken)
+    deps.clock.advance('2s')
+    const real = deps.membership.forUser
+    deps.membership.forUser = async (userId, signal) => {
+      deps.membership.forUser = real
+      await refresh(text(first.body, 'refreshToken'))
+      return real(userId, signal)
+    }
+
+    const replay = await refresh(refreshToken)
+
+    expect(replay.body).toMatchObject({ error: { code: 'session.reuse_detected' } })
+    const environmentId = deps.tenant.current?.environmentId ?? ''
+    expect((await deps.sessions.findById(environmentId, sessionId))?.revokeReason).toBe(
+      'reuse_detected'
+    )
+  })
+
+  describe('an expiry that passes while core is being asked', () => {
+    const FAR = new Date('2100-01-01T00:00:00Z')
+    type Limits = { idle: Date; absolute: Date; token: Date }
+
+    /** Core takes 4 s, and the stored rows say when each limit falls: `soon` is `offsetMs` from the new `now`. */
+    async function withLimits(limits: (soon: Date) => Limits, offsetMs: number) {
+      const ctx = await setup()
+      const { deps } = ctx
+      const environmentId = deps.tenant.current?.environmentId ?? ''
+      const read = deps.sessions.findToken.bind(deps.sessions)
+      const set = limits(new Date(deps.clock.now().getTime() + 4000 + offsetMs))
+      deps.sessions.findToken = async (...args) => {
+        const found = await read(...args)
+        return (
+          found && {
+            token: { ...found.token, expiresAt: set.token },
+            session: {
+              ...found.session,
+              idleExpiresAt: set.idle,
+              absoluteExpiresAt: set.absolute,
+            },
+          }
+        )
+      }
+      const forUser = deps.membership.forUser
+      deps.membership.forUser = async (userId, signal) => {
+        deps.clock.advance('4s')
+        return forUser(userId, signal)
+      }
+      return { ...ctx, environmentId, read }
+    }
+
+    // The limit falls 2 s before, and exactly at, the time the clock reads after core answers.
+    test.each([
+      ['idle', (soon: Date) => ({ idle: soon, absolute: FAR, token: FAR })],
+      ['absolute', (soon: Date) => ({ idle: FAR, absolute: soon, token: FAR })],
+      ['token', (soon: Date) => ({ idle: FAR, absolute: FAR, token: soon })],
+    ])('the %s expiry refuses the refresh and rotates nothing', async (_name, limits) => {
+      for (const offsetMs of [-2000, 0]) {
+        const { deps, refresh, refreshToken, read, environmentId } = await withLimits(
+          limits,
+          offsetMs
+        )
+
+        const reply = await refresh(refreshToken)
+
+        expect(reply.status).toBe(401)
+        expect(reply.body).toMatchObject({ error: { code: 'session.expired' } })
+        expect((await read(environmentId, sha256Hex(refreshToken)))?.token.usedAt).toBeNull()
+        expect(deps.membership.calls.lookup).toBeGreaterThan(0)
+      }
+    })
+
+    test.each([
+      ['2 s before', -2000],
+      ['exactly at', 0],
+    ])(
+      'a replay inside the grace window is refused when the idle expiry falls %s the new time',
+      async (_name, offsetMs) => {
+        const { deps, refresh, refreshToken } = await setup()
+        await refresh(refreshToken)
+        deps.clock.advance('2s')
+        const forUser = deps.membership.forUser
+        deps.membership.forUser = async (userId, signal) => {
+          deps.clock.advance('4s')
+          const read = deps.sessions.findToken.bind(deps.sessions)
+          const idleExpiresAt = new Date(deps.clock.now().getTime() + offsetMs)
+          deps.sessions.findToken = async (...args) => {
+            const found = await read(...args)
+            return found && { ...found, session: { ...found.session, idleExpiresAt } }
+          }
+          return forUser(userId, signal)
+        }
+
+        const replay = await refresh(refreshToken)
+
+        expect(replay.status).toBe(401)
+        expect(replay.body).toMatchObject({ error: { code: 'session.expired' } })
+        expect(JSON.stringify(replay.body)).not.toContain('tula_rt_')
+        expect(JSON.stringify(replay.body)).not.toContain('accessToken')
+      }
+    )
+  })
+
+  test('KNOWN TOLERANCE: a user banned while core is being asked gets one more rotation, and the next refresh is refused', async () => {
+    const { deps, refresh, refreshToken } = await setup()
+    const environmentId = deps.tenant.current?.environmentId ?? ''
+    const user = await deps.users.findByEmail(environmentId, 'maya@northline.app')
+    const real = deps.membership.forUser
+    deps.membership.forUser = async (userId, signal) => {
+      deps.users.ban(user?.id ?? '', deps.clock.now())
+      return real(userId, signal)
+    }
+
+    const during = await refresh(refreshToken)
+    const next = await refresh(text(during.body, 'refreshToken'))
+
+    expect(during.status).toBe(200)
+    expect(next.status).toBe(403)
+    expect(next.body).toMatchObject({ error: { code: 'auth.user_banned' } })
   })
 
   test('a role change reaches the next token', async () => {
