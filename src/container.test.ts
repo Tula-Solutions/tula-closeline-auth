@@ -161,6 +161,33 @@ describe('which membership adapter the container builds', () => {
     }
   })
 
+  test('the limits on calls to core come from the settings', async () => {
+    const core = startFakeCore()
+    try {
+      const env = loadEnv({
+        ENVIRONMENT: 'local',
+        REGION: 'us',
+        CORE_BASE_URL: core.url,
+        CORE_INTERNAL_TOKEN: core.secret,
+        CORE_CONCURRENCY: '1',
+        CORE_QUEUE: '0',
+      })
+      const membership = createMembership(env, quiet)
+      core.script({ kind: 'hang' })
+      const controller = new AbortController()
+      const stalled = membership.forUser(userId, controller.signal)
+      await core.untilRequests(1)
+
+      await expect(membership.forUser(userId)).rejects.toThrow(/too many calls/)
+
+      expect(core.requests).toHaveLength(1)
+      controller.abort()
+      await expect(stalled).rejects.toThrow()
+    } finally {
+      await core.stop()
+    }
+  })
+
   test('outside local the placeholder can never be chosen: loading the settings fails, and so does building from an env that slipped past', () => {
     for (const environment of ['dev', 'staging', 'prod']) {
       expect(() =>

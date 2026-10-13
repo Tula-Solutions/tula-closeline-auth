@@ -22,6 +22,8 @@ test('configuration falls back to defaults for everything but the environment', 
     SIGN_IN_QUEUE: 16,
     BREACH_CHECK_CONCURRENCY: 8,
     BREACH_CHECK_QUEUE: 16,
+    CORE_CONCURRENCY: 64,
+    CORE_QUEUE: 256,
   })
 })
 
@@ -50,6 +52,10 @@ test.each([
   ['a sign-in queue above 1000', { SIGN_IN_QUEUE: '1001' }],
   ['no breach lookup slots', { BREACH_CHECK_CONCURRENCY: '0' }],
   ['a breach queue above 1000', { BREACH_CHECK_QUEUE: '1001' }],
+  ['no slots for calls to core', { CORE_CONCURRENCY: '0' }],
+  ['more than 1000 calls to core at once', { CORE_CONCURRENCY: '1001' }],
+  ['a negative queue for calls to core', { CORE_QUEUE: '-1' }],
+  ['a core queue above 10000', { CORE_QUEUE: '10001' }],
 ])('configuration rejects %s at boot', (_name, source) => {
   expect(() => loadEnv({ ENVIRONMENT: 'local', REGION: 'us', ...source })).toThrow()
 })

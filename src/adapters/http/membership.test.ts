@@ -309,6 +309,57 @@ describe('time and the caller giving up', () => {
   })
 })
 
+describe('how many calls to core are in flight', () => {
+  test('a stalled core never has more calls in flight than the cap, and a full queue fails at once', async () => {
+    const { core, adapter } = connect({ concurrency: 3, queue: 2 })
+    core.script(...Array.from({ length: 12 }, () => ({ kind: 'hang' }) as const))
+    const controllers = Array.from({ length: 8 }, () => new AbortController())
+
+    const calls = controllers.map((controller) =>
+      adapter.forUser(user(), controller.signal).then(
+        () => 'answered' as const,
+        (error: unknown) => error
+      )
+    )
+    await core.untilRequests(3)
+    // Three are in flight and two wait; the other three were turned away without being sent.
+    const refused = await Promise.all([calls[5], calls[6], calls[7]])
+    for (const error of refused) {
+      expect(error).toBeInstanceOf(MembershipUnavailable)
+      expect(error).toMatchObject({ name: 'CoreSaturated' })
+    }
+    expect(core.requests).toHaveLength(3)
+
+    // A slot freed by a caller giving up goes to the next in line, never to a fourth at once.
+    controllers[0]?.abort()
+    await core.untilRequests(4)
+    expect(core.requests).toHaveLength(4)
+
+    for (const controller of controllers) {
+      controller.abort()
+    }
+    await Promise.all(calls)
+    // The fifth, still queued, found its caller gone and sent nothing.
+    expect(core.requests).toHaveLength(4)
+  })
+
+  test('a call that waited for a slot is not retried when it is refused, and the answer is the same for every call', async () => {
+    const { core, adapter } = connect({ concurrency: 1, queue: 0 })
+    core.script({ kind: 'hang' })
+    const controller = new AbortController()
+    const stalled = adapter.forUser(user(), controller.signal).catch(() => 'aborted')
+    await core.untilRequests(1)
+
+    for (const name of CALL_NAMES) {
+      await expect(CALLS[name](adapter)).rejects.toMatchObject({ name: 'CoreSaturated' })
+    }
+
+    expect(core.requests).toHaveLength(1)
+    controller.abort()
+    await stalled
+  })
+})
+
 describe('what core can answer', () => {
   test.each(CALL_NAMES)(
     '%s: a wrong secret is a deployment fault, reported by name, not retried',

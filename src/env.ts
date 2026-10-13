@@ -49,6 +49,13 @@ const schema = z
     BREACH_CHECK_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(8),
     /** How many more may wait for a lookup slot; past that a request gets a 503 at once. */
     BREACH_CHECK_QUEUE: z.coerce.number().int().min(0).max(1_000).default(16),
+    /**
+     * The most requests to the core service in flight at once from this instance. A stalled core
+     * then holds this many sockets and no more.
+     */
+    CORE_CONCURRENCY: z.coerce.number().int().min(1).max(1_000).default(64),
+    /** How many more calls to core may wait for a slot; past that a call fails at once (503). */
+    CORE_QUEUE: z.coerce.number().int().min(0).max(10_000).default(256),
     /** The Region this deployment serves (ADR 0001); stamped into every token. No default. */
     REGION: regionSchema,
     /** The `closeline_auth` login. Defaults to the local compose database in `local` only. */

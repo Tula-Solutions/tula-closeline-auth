@@ -18,6 +18,7 @@ import {
 } from 'tula-closeline-contract'
 import type { Logger } from 'tula-closeline-kit'
 import type { z } from 'zod'
+import { createConcurrencyLimiter, Saturated } from '~/lib/concurrency'
 import {
   type Membership,
   type MembershipClaims,
@@ -47,6 +48,12 @@ function defaultRetryDelayMs(): number {
   return 50 + Math.random() * 100
 }
 
+/** How many calls to core one instance has in flight at once, unless configured otherwise. */
+export const DEFAULT_CORE_CONCURRENCY = 64
+
+/** How many more calls may wait for a slot, unless configured otherwise. */
+export const DEFAULT_CORE_QUEUE = 256
+
 /** The largest answer from core that is read; the real ones are under 300 bytes. */
 const MAX_ANSWER_BYTES = 16 * 1024
 
@@ -66,6 +73,13 @@ export type HttpMembershipOptions = {
   writeTimeoutMs?: number
   /** How long to pause before the lookup's retry; defaults to a jittered 50 to 150 ms. */
   retryDelayMs?: () => number
+  /** The most requests to core in flight at once; defaults to {@link DEFAULT_CORE_CONCURRENCY}. */
+  concurrency?: number
+  /**
+   * How many more calls may wait for a slot; past that a call fails as unavailable at once.
+   * Defaults to {@link DEFAULT_CORE_QUEUE}.
+   */
+  queue?: number
 }
 
 /**
@@ -77,6 +91,18 @@ export class CoreCredentialsRejected extends MembershipRejected {
   constructor(status: number) {
     super(`core refused the service credentials (HTTP ${status}); check CORE_INTERNAL_TOKEN`)
     this.name = 'CoreCredentialsRejected'
+  }
+}
+
+/**
+ * Every slot for calls to core is taken and so is every place in the line: the call is refused at
+ * once, unsent, as unavailable, so a stalled core cannot make this instance pile up requests
+ * (and memory) behind it.
+ */
+class CoreSaturated extends MembershipUnavailable {
+  constructor() {
+    super('too many calls to core are in flight')
+    this.name = 'CoreSaturated'
   }
 }
 
@@ -149,6 +175,10 @@ function pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
  * carries `Authorization: Bearer <shared secret>` and an `Idempotency-Key`; every answer is
  * checked against the contract's schema and anything else is unavailable.
  *
+ * At most `concurrency` requests are in flight and `queue` more wait; past that a call fails as
+ * unavailable at once (a stalled core cannot pile requests up here). The caller's bound covers the
+ * wait for a slot too.
+ *
  * Retries: only the lookup (a read), once, after a jittered pause, on a network error, a timeout
  * of the attempt, or a 5xx. The sign-up calls are tried once: the flow retries the whole attempt
  * under the same key. A redirect is never followed (it would carry the secret to another host).
@@ -162,8 +192,13 @@ export function createHttpMembership(options: HttpMembershipOptions): Membership
   const writeTimeoutMs = options.writeTimeoutMs ?? WRITE_TIMEOUT_MS
   const retryDelayMs = options.retryDelayMs ?? defaultRetryDelayMs
 
+  const limiter = createConcurrencyLimiter({
+    concurrency: options.concurrency ?? DEFAULT_CORE_CONCURRENCY,
+    queue: options.queue ?? DEFAULT_CORE_QUEUE,
+  })
+
   /** One request to core. Throws {@link AttemptFailed} when no answer could be had. */
-  const exchange = async (
+  const callCore = async (
     path: string,
     payload: unknown,
     idempotencyKey: string,
@@ -207,6 +242,27 @@ export function createHttpMembership(options: HttpMembershipOptions): Membership
       // The name only: a network error's message can quote the address it tried.
       const kind = error instanceof Error ? error.name : 'unknown'
       throw new AttemptFailed(`core could not be reached (${kind})`, true)
+    }
+  }
+
+  /**
+   * One request to core, inside the concurrency limit. The limit covers only the request: a
+   * lookup's pause before its retry holds no slot. A caller that gave up while waiting for a slot
+   * sends nothing when its turn comes. Throws {@link CoreSaturated} when the line is full.
+   */
+  const exchange = async (
+    path: string,
+    payload: unknown,
+    idempotencyKey: string,
+    timeoutMs: number,
+    callerSignal: AbortSignal | undefined
+  ): Promise<Answer> => {
+    try {
+      return await limiter.run(() =>
+        callCore(path, payload, idempotencyKey, timeoutMs, callerSignal)
+      )
+    } catch (error) {
+      throw error instanceof Saturated ? new CoreSaturated() : error
     }
   }
 

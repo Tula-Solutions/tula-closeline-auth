@@ -152,6 +152,8 @@ export function createMembership(env: Env, logger: Pick<Logger, 'warn'>): Member
       baseUrl: env.CORE_BASE_URL,
       token: env.CORE_INTERNAL_TOKEN,
       logger,
+      concurrency: env.CORE_CONCURRENCY,
+      queue: env.CORE_QUEUE,
     })
   }
   if (env.ENVIRONMENT === 'local') {
