@@ -892,6 +892,29 @@ describe('failures around the commit of a sign-up', () => {
 })
 
 describe('guards that must hold on their own', () => {
+  test('a code is single-use: two verifications with one code at once give one session and one 409', async () => {
+    const { deps, signUp, verify, nextEmail } = await setup()
+    const email = nextEmail()
+    const started = await signUp(email)
+    const code = emailedCode(deps, email)
+
+    const replies = await Promise.all([verify(started, code), verify(started, code)])
+
+    expect(replies.map((reply) => reply.status).sort()).toEqual([200, 409])
+    expect(replies.find((reply) => reply.status === 409)?.body).toMatchObject({
+      error: { code: 'flow.invalid_step' },
+    })
+    const user = await deps.users.findByEmail(deps.tenant.current?.environmentId ?? '', email)
+    const sessions = await deps.sessions.listActive(
+      deps.tenant.current?.environmentId ?? '',
+      user?.id ?? '',
+      deps.clock.now(),
+      10
+    )
+    expect(sessions).toHaveLength(1)
+    expect(deps.membership.organizations).toHaveLength(1)
+  })
+
   test("an attempt of one kind is not accepted by the other kind's steps", async () => {
     const { app, signUp, nextEmail } = await setup()
     const signUpAttempt = await signUp(nextEmail())
