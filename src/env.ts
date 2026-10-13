@@ -4,6 +4,27 @@ import { z } from 'zod'
 /** The most grace plus drain may add up to, so an orchestrator's kill window is not outlasted. */
 const MAX_SHUTDOWN_TOTAL_MS = 60_000
 
+/**
+ * The three spellings of a local mailbox's origin, with an optional port (1 to 65535, no leading
+ * zero) and an optional single trailing slash. Matched on the raw value, so no other spelling of
+ * the same address (`127.1`, `2130706433`, `127.0.0.1.`, a full-width name, spaces) is accepted.
+ */
+const LOCAL_MAILBOX =
+  /^http:\/\/(127\.0\.0\.1|\[::1\]|[lL][oO][cC][aA][lL][hH][oO][sS][tT])(?::([1-9]\d{0,4}))?\/?$/
+
+/** The canonical origin of a local mailbox (lower-case, no trailing slash), or `undefined`. */
+function localMailboxOrigin(value: string): string | undefined {
+  const match = LOCAL_MAILBOX.exec(value)
+  if (match === null) {
+    return undefined
+  }
+  const port = match[2]
+  if (port !== undefined && Number(port) > 65535) {
+    return undefined
+  }
+  return `http://${(match[1] ?? '').toLowerCase()}${port === undefined ? '' : `:${port}`}`
+}
+
 const schema = z
   .object({
     /** Which deployment this is. No default: a deploy that forgets it must fail at boot. */
@@ -94,8 +115,35 @@ const schema = z
       .max(512, 'CORE_INTERNAL_TOKEN must be at most 512 characters')
       .regex(/^[\x21-\x7e]+$/, 'CORE_INTERNAL_TOKEN must be printable characters with no spaces')
       .optional(),
+    /**
+     * Where a local mailbox (Mailpit) takes mail: exactly `http://127.0.0.1`, `http://[::1]` or
+     * `http://localhost`, with an optional port and trailing slash and nothing else. Accepted only when
+     * `ENVIRONMENT=local`. With it set, sign-up mail goes to that mailbox; without it the
+     * unconfigured mailer stays and sign-up answers `mail.unavailable`.
+     */
+    MAIL_LOCAL_URL: z.string().optional(),
+    /** The `From` address of local mail. Accepted only when `ENVIRONMENT=local`. */
+    MAIL_LOCAL_FROM: z.email().optional(),
   })
   .superRefine((env, ctx) => {
+    // Messages name the key and the rule, never the value: a URL can carry credentials.
+    for (const key of ['MAIL_LOCAL_URL', 'MAIL_LOCAL_FROM'] as const) {
+      if (env[key] !== undefined && env.ENVIRONMENT !== 'local') {
+        ctx.addIssue({
+          code: 'custom',
+          path: [key],
+          message: `${key} is accepted only when ENVIRONMENT is local`,
+        })
+      }
+    }
+    if (env.MAIL_LOCAL_URL !== undefined && localMailboxOrigin(env.MAIL_LOCAL_URL) === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['MAIL_LOCAL_URL'],
+        message:
+          'MAIL_LOCAL_URL must be written exactly as http://127.0.0.1, http://[::1] or http://localhost, optionally followed by :port and one trailing slash',
+      })
+    }
     if (env.ENVIRONMENT === 'local') {
       // Both or neither: half a configuration would quietly fall back to the placeholder.
       for (const [key, other] of [
@@ -138,6 +186,12 @@ const schema = z
     message: `SHUTDOWN_GRACE_MS plus SHUTDOWN_TIMEOUT_MS must not exceed ${MAX_SHUTDOWN_TOTAL_MS} ms in total`,
     path: ['SHUTDOWN_TIMEOUT_MS'],
   })
+  .transform((env) =>
+    // Keep the canonical origin, so nothing downstream sees another spelling of the address.
+    env.MAIL_LOCAL_URL === undefined
+      ? env
+      : { ...env, MAIL_LOCAL_URL: localMailboxOrigin(env.MAIL_LOCAL_URL) ?? env.MAIL_LOCAL_URL }
+  )
 
 /** The validated process configuration. */
 export type Env = z.infer<typeof schema>
