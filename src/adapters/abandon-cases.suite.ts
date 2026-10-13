@@ -123,6 +123,27 @@ export function describeAbandonCases(name: string, setup: () => Promise<AbandonC
       })
     })
 
+    test('settling an untouched case means no claim can ever take it', async () => {
+      const one = input()
+      await ctx.store.record(one)
+
+      expect(await ctx.store.settle(ctx.a.environmentId, one.id)).toBe(true)
+      expect(await ctx.store.settle(ctx.a.environmentId, one.id)).toBe(false)
+      await ctx.age(ctx.a.environmentId, 700)
+      expect(await claim()).toEqual([])
+    })
+
+    test('a case the sweep claimed first cannot be settled', async () => {
+      const one = input()
+      await ctx.store.record(one)
+      await ctx.age(ctx.a.environmentId, 700)
+      expect(await claim()).toHaveLength(1)
+
+      expect(await ctx.store.settle(ctx.a.environmentId, one.id)).toBe(false)
+      expect(await ctx.store.settle(ctx.b.environmentId, one.id)).toBe(false)
+      expect(await ctx.store.settle(ctx.a.environmentId, crypto.randomUUID())).toBe(false)
+    })
+
     test('learns the Organization id once; another case holding it is a conflict', async () => {
       const first = input()
       const second = input()

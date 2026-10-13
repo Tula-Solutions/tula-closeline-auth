@@ -1,15 +1,21 @@
-import type { NewUser, UserRecord, UserRepository, UserWithPassword } from '~/ports/user-repository'
+import {
+  AbandonCaseClaimed,
+  type NewUser,
+  type UserRecord,
+  type UserRepository,
+  type UserWithPassword,
+} from '~/ports/user-repository'
 
 type Stored = { user: UserRecord; passwordHash: string; passwordChangedAt: Date }
 
 /** Users in process memory, for unit tests; behaves like the Postgres repository. */
 export class MemoryUserRepository implements UserRepository {
   readonly #byId = new Map<string, Stored>()
-  readonly #resolveCase: ((environmentId: string, caseId: string) => Promise<unknown>) | undefined
+  readonly #settleCase: ((environmentId: string, caseId: string) => Promise<boolean>) | undefined
 
-  /** @param resolveCase - Resolves an abandon case as `done`, run with each account created. */
-  constructor(resolveCase?: (environmentId: string, caseId: string) => Promise<unknown>) {
-    this.#resolveCase = resolveCase
+  /** @param settleCase - Settles an abandon case; `false` rejects the account (nothing written). */
+  constructor(settleCase?: (environmentId: string, caseId: string) => Promise<boolean>) {
+    this.#settleCase = settleCase
   }
 
   /** @inheritdoc */
@@ -47,16 +53,19 @@ export class MemoryUserRepository implements UserRepository {
     ) {
       return false
     }
-    const { identityId: _i, credentialId: _c, passwordHash, resolvesAbandonCase, ...record } = user
+    const { identityId: _i, credentialId: _c, passwordHash, settlesAbandonCase, ...record } = user
+    // Last, as in the Postgres transaction: a rejected settle writes no account.
+    if (settlesAbandonCase !== undefined && this.#settleCase) {
+      if (!(await this.#settleCase(user.environmentId, settlesAbandonCase))) {
+        throw new AbandonCaseClaimed()
+      }
+    }
     const stored: Stored = {
       user: { ...record, bannedAt: null, lastSignInAt: null },
       passwordHash,
       passwordChangedAt: user.createdAt,
     }
     this.#byId.set(user.id, stored)
-    if (resolvesAbandonCase !== undefined) {
-      await this.#resolveCase?.(user.environmentId, resolvesAbandonCase)
-    }
     return true
   }
 

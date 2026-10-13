@@ -7,6 +7,7 @@ import {
   ABANDON_PURGE_BATCH,
   ABANDON_RECORD,
   ABANDON_RESOLVE,
+  ABANDON_SETTLE,
   type Database,
   withEnvironment,
 } from 'tula-closeline-db'
@@ -104,6 +105,14 @@ export function createPostgresAbandonCases(db: Database): AbandonCaseStore {
     async resolve(environmentId, id, outcome: AbandonOutcome) {
       const rows = await withEnvironment(db, environmentId, async (tx) => {
         const result = await tx.execute(statement(ABANDON_RESOLVE, [id, environmentId, outcome]))
+        return result.rows
+      })
+      return rows.length > 0
+    },
+
+    async settle(environmentId, id) {
+      const rows = await withEnvironment(db, environmentId, async (tx) => {
+        const result = await tx.execute(statement(ABANDON_SETTLE, [id, environmentId]))
         return result.rows
       })
       return rows.length > 0

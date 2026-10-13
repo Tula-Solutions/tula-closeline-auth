@@ -110,6 +110,20 @@ export function createMemoryAbandonCases(clock: Clock): MemoryAbandonCases {
       row.outcome = outcome
       return true
     },
+    async settle(environmentId, id) {
+      const row = rows.get(id)
+      if (
+        !row ||
+        row.environmentId !== environmentId ||
+        row.resolvedAt !== null ||
+        row.attempts > 0
+      ) {
+        return false
+      }
+      row.resolvedAt = clock.now().getTime()
+      row.outcome = 'not_needed'
+      return true
+    },
     async giveUpSpent(environmentId, limit) {
       const now = clock.now().getTime()
       const spent = ofEnvironment(environmentId)

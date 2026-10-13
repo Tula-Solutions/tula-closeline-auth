@@ -111,7 +111,7 @@ describe('the abandon sweep', () => {
 
     const done = await verify(started, code)
     expect(done.status).toBe(200)
-    expect(only().outcome).toBe('done')
+    expect(only().outcome).toBe('not_needed')
     pastGrace()
     const result = await sweepOnce(deps, tenant)
 
@@ -138,7 +138,7 @@ describe('the abandon sweep', () => {
     expect(second.status).toBe(200)
     expect(result.abandoned).toBe(0)
     expect(deps.membership.calls.abandon).toBe(0)
-    expect(only().outcome).toBe('done')
+    expect(only().outcome).toBe('not_needed')
   })
 
   test('an account that commits just before the attempt expires, without resolving the case, is still never abandoned', async () => {
@@ -168,7 +168,7 @@ describe('the abandon sweep', () => {
 
     expect(result.account_exists).toBe(1)
     expect(deps.membership.calls.abandon).toBe(0)
-    expect(only().outcome).toBe('done')
+    expect(only().outcome).toBe('not_needed')
   })
 
   test('a refusal (409) resolves the case as refused and is reported once, by ids', async () => {
@@ -253,7 +253,7 @@ describe('the abandon sweep', () => {
 
     expect(result.no_organization).toBe(1)
     expect(deps.membership.calls.abandon).toBe(0)
-    expect(only().outcome).toBe('done')
+    expect(only().outcome).toBe('not_needed')
   })
 
   test('a case that keeps failing is given up and reported by ids', async () => {
@@ -380,7 +380,7 @@ describe('recording a sign-up', () => {
     const done = await verify(started, code)
 
     expect(done.status).toBe(200)
-    expect(only().outcome).toBe('gave_up')
+    expect(only().outcome).toBe('not_needed')
     expect(reconciles(deps)).toHaveLength(0)
     expect(
       deps.reported.some((entry) => String(entry.error).includes('another case already holds'))
@@ -572,5 +572,75 @@ describe('retrying an attempt whose case the sweep or a request already settled'
     deps.users.create = create
 
     expect((await verify(started, code)).status).toBe(200)
+  })
+})
+
+describe('the account and the sweep cannot both win', () => {
+  test('a verify that loses the claim answers as for an expired attempt, writes nothing, and the sweep abandons the Organization', async () => {
+    const { deps, tenant, start, verify, only } = await setup()
+    const { email, started, code } = await start()
+    // The sweep claims the case between core's answer and the account insert.
+    const create = deps.membership.createOrganization.bind(deps.membership)
+    deps.membership.createOrganization = async (input) => {
+      const created = await create(input)
+      deps.abandonCases.makeDue(only().id)
+      deps.clock.advance('11m')
+      expect(await deps.abandonCases.claim(tenant.environmentId, 1, 60_000)).toHaveLength(1)
+      return created
+    }
+
+    const reply = await verify(started, code)
+
+    expect(reply.status).toBe(404)
+    expect(reply.body).toMatchObject({ error: { code: 'flow.not_found' } })
+    expect(reply.headers.get('set-cookie')).toBeNull()
+    expect(JSON.stringify(reply.body)).not.toContain('Token')
+    expect(await deps.users.findByEmail(tenant.environmentId, email)).toBeNull()
+    expect(only().outcome).toBeNull()
+
+    deps.clock.advance('2m')
+    const result = await sweepOnce(deps, tenant)
+
+    expect(result.abandoned).toBe(1)
+    expect(only().outcome).toBe('done')
+    expect(deps.membership.abandons).toHaveLength(1)
+  })
+
+  test('a verify that wins settles the case: no later run claims it or abandons anything', async () => {
+    const { deps, tenant, start, verify, pastGrace, only } = await setup()
+    const { started, code } = await start()
+
+    expect((await verify(started, code)).status).toBe(200)
+    pastGrace()
+
+    expect(only().outcome).toBe('not_needed')
+    expect(await deps.abandonCases.claim(tenant.environmentId, 10, 60_000)).toEqual([])
+    expect((await sweepOnce(deps, tenant)).abandoned).toBe(0)
+    expect(deps.membership.calls.abandon).toBe(0)
+  })
+
+  test('a retry after a crash past the commit finds the account and is not failed by the settle', async () => {
+    const { deps, tenant, start, verify, only } = await setup()
+    const { email, started, code } = await start()
+    expect((await verify(started, code)).status).toBe(200)
+    expect(only().outcome).toBe('not_needed')
+    // The same user id and address again, as a retry would: the unique violation comes first.
+    const user = await deps.users.findByEmail(tenant.environmentId, email)
+    const again = await deps.users.create({
+      id: String(user?.id),
+      projectId: tenant.projectId,
+      environmentId: tenant.environmentId,
+      email,
+      emailNormalized: email,
+      emailVerifiedAt: deps.clock.now(),
+      firstName: null,
+      lastName: null,
+      createdAt: deps.clock.now(),
+      identityId: crypto.randomUUID(),
+      credentialId: crypto.randomUUID(),
+      passwordHash: '$argon2id$x',
+      settlesAbandonCase: only().id,
+    })
+    expect(again).toBe(false)
   })
 })

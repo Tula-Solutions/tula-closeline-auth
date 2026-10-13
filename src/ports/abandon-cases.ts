@@ -1,5 +1,8 @@
-/** How an abandon case ended: the Organization is gone or none is owed, core refused, or we gave up. */
-export type AbandonOutcome = 'done' | 'refused' | 'gave_up'
+/**
+ * How an abandon case ended: `done` core removed the Organization; `not_needed` there was nothing
+ * to remove (an account exists, or core holds none); `refused` and `gave_up` need a person.
+ */
+export type AbandonOutcome = 'done' | 'not_needed' | 'refused' | 'gave_up'
 
 /** What a sign-up records before it asks core for an Organization. */
 export interface NewAbandonCase {
@@ -57,6 +60,14 @@ export interface AbandonCaseStore {
    * resolves is due again when the lease ends.
    */
   claim(environmentId: string, limit: number, leaseMs: number): Promise<ClaimedAbandonCase[]>
+
+  /**
+   * Settles an untouched case as `not_needed`: unresolved and never claimed (`attempts = 0`).
+   * `false` means the sweep claimed it first (or it was resolved, or never recorded). The account
+   * transaction does this itself, last (see `NewUser.settlesAbandonCase`); this stand-alone form
+   * is for tests of the rule.
+   */
+  settle(environmentId: string, id: string): Promise<boolean>
 
   /** Records the outcome; `false` when the case was already resolved (not an error). */
   resolve(environmentId: string, id: string, outcome: AbandonOutcome): Promise<boolean>

@@ -91,7 +91,7 @@ export function createTestDeps(
     membership: createMemoryMembership(clock),
     abandonCases,
     users: new MemoryUserRepository((environmentId, caseId) =>
-      abandonCases.resolve(environmentId, caseId, 'done')
+      abandonCases.settle(environmentId, caseId)
     ),
     flowAttempts: new MemoryFlowAttemptStore(),
     verificationTokens: new MemoryVerificationTokenStore(),

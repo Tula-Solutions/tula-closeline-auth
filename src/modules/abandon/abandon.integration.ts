@@ -4,6 +4,7 @@ import type { Pool } from 'pg'
 import { withEnvironment } from 'tula-closeline-db'
 import { createApp } from '~/app'
 import * as Bootstrap from '~/modules/bootstrap/service'
+import { AbandonCaseClaimed } from '~/ports/user-repository'
 import { call, emailedCode, text } from '~/testing/client'
 import { ownerPool } from '~/testing/postgres'
 import { createPostgresDeps } from '~/testing/postgres-deps'
@@ -306,5 +307,77 @@ describe('the abandon sweep against a real Postgres', () => {
 
     expect(await deps.abandonCases.purgeResolved(tenant.environmentId, 10)).toBe(1)
     expect(await cases()).toEqual([])
+  })
+
+  const newUser = (id: string, email: string, caseId: string) => {
+    const tenant = Bootstrap.requireTenant(deps)
+    return {
+      id,
+      projectId: tenant.projectId,
+      environmentId: tenant.environmentId,
+      email,
+      emailNormalized: email,
+      emailVerifiedAt: new Date(),
+      firstName: null,
+      lastName: null,
+      createdAt: new Date(),
+      identityId: crypto.randomUUID(),
+      credentialId: crypto.randomUUID(),
+      passwordHash: '$argon2id$x',
+      settlesAbandonCase: caseId,
+    }
+  }
+  const recordCase = async (userId: string) => {
+    const tenant = Bootstrap.requireTenant(deps)
+    const id = crypto.randomUUID()
+    await deps.abandonCases.record({
+      id,
+      projectId: tenant.projectId,
+      environmentId: tenant.environmentId,
+      organizationId: null,
+      userId,
+      attemptId: id,
+      attemptExpiresAt: new Date(Date.now() + 600_000),
+      graceMs: 30_000,
+    })
+    return id
+  }
+
+  test('an account whose case the sweep claimed first is rejected and writes no user row', async () => {
+    const tenant = Bootstrap.requireTenant(deps)
+    const userId = crypto.randomUUID()
+    const caseId = await recordCase(userId)
+    await age(FAR)
+    expect(await deps.abandonCases.claim(tenant.environmentId, 10, 60_000)).toHaveLength(1)
+
+    await expect(deps.users.create(newUser(userId, 'late@northline.app', caseId))).rejects.toThrow(
+      AbandonCaseClaimed
+    )
+
+    expect(await deps.users.findById(tenant.environmentId, userId)).toBeNull()
+    expect(await deps.users.findByEmail(tenant.environmentId, 'late@northline.app')).toBeNull()
+    expect((await cases())[0]?.outcome).toBeNull()
+  })
+
+  test('an account that settles first leaves nothing for a sweep to claim, and the Organization is kept', async () => {
+    const tenant = Bootstrap.requireTenant(deps)
+    const { verify } = await start()
+    const before = deps.membership.abandons.length
+
+    expect((await verify()).status).toBe(200)
+    await age(FAR)
+    const result = await Abandon.sweep(deps, tenant)
+
+    expect((await cases())[0]?.outcome).toBe('not_needed')
+    expect(result.abandoned + result.account_exists + result.no_organization).toBe(0)
+    expect(deps.membership.abandons).toHaveLength(before)
+  })
+
+  test('a retry whose account exists meets the unique violation, not the settle', async () => {
+    const userId = crypto.randomUUID()
+    const caseId = await recordCase(userId)
+    expect(await deps.users.create(newUser(userId, 'once@northline.app', caseId))).toBe(true)
+
+    expect(await deps.users.create(newUser(userId, 'once@northline.app', caseId))).toBe(false)
   })
 })

@@ -118,14 +118,15 @@ async function settle(
 ): Promise<CaseResult> {
   const { environmentId } = tenant
   const { id, userId, attemptId } = claimed
-  const resolve = (outcome: 'done' | 'refused' | 'gave_up') =>
+  const resolve = (outcome: 'done' | 'not_needed' | 'refused' | 'gave_up') =>
     deps.abandonCases.resolve(environmentId, id, outcome)
   /** Resolves as `done` and says which of the three results it was, ids only. */
   const finish = async (
     result: 'account_exists' | 'no_organization' | 'abandoned',
     org?: string | null
   ) => {
-    if (!(await resolve('done'))) {
+    // `done` only when core removed the Organization; `not_needed` when there was nothing to remove.
+    if (!(await resolve(result === 'abandoned' ? 'done' : 'not_needed'))) {
       return 'lost_lease' as const
     }
     deps.logger.info('an abandon case was finished', {

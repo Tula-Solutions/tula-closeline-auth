@@ -31,6 +31,7 @@ import {
   signInLockKey,
 } from '~/ports/lockout'
 import type { SessionClient } from '~/ports/session-store'
+import { AbandonCaseClaimed } from '~/ports/user-repository'
 import { type KnownDevice, newDeviceId, setDeviceCookie } from './device-cookie'
 import {
   ATTEMPT_SECRET_PREFIX,
@@ -393,8 +394,9 @@ export async function settleOrphan(
 /**
  * Fills in the Organization id of the attempt's abandon case once core has answered. Best effort:
  * if it fails the case stays unlearned and the sweep finds the Organization by the user id. A
- * unique violation (another case already holds this Organization) resolves this case as
- * `gave_up` in a new transaction and is reported by ids; the sign-up goes on. Never throws.
+ * unique violation (another case already holds this Organization) is reported by ids and the case
+ * is left open: the sign-up goes on, and if its account commits that settles the case, otherwise
+ * the sweep meets the same conflict and gives the case up. Never throws.
  */
 async function learnOrganization(
   deps: Pick<Container, 'logger' | 'abandonCases' | 'reportError'>,
@@ -406,7 +408,6 @@ async function learnOrganization(
   try {
     const learned = await deps.abandonCases.learn(tenant.environmentId, caseId, organizationId)
     if (learned === 'conflict') {
-      await deps.abandonCases.resolve(tenant.environmentId, caseId, 'gave_up')
       deps.logger.warn('another abandon case already holds this Organization', {
         caseId,
         organizationId,
@@ -623,7 +624,7 @@ export async function verifyEmail(
       identityId: deps.ids.next(),
       credentialId: deps.ids.next(),
       passwordHash: state.passwordHash,
-      ...(abandonCaseId !== undefined ? { resolvesAbandonCase: abandonCaseId } : {}),
+      ...(abandonCaseId !== undefined ? { settlesAbandonCase: abandonCaseId } : {}),
     })
     if (!created) {
       // A unique violation: this user id, or this address, is already taken.
@@ -651,6 +652,17 @@ export async function verifyEmail(
       // Otherwise the account is this attempt's own (an earlier request of it committed): done.
     }
   } catch (error) {
+    if (error instanceof AbandonCaseClaimed) {
+      // The sweep claimed the case before the account could commit, and abandons the
+      // Organization (nobody is told it is unowned: the sweep owns it now). Nothing was written:
+      // no account, no session. The person signs up again, as for an expired attempt.
+      deps.logger.warn('an account lost the race with the abandon sweep', {
+        attemptId: attempt.id,
+        organizationId: membership.organizationId,
+        userId: userUuid,
+      })
+      throw fail(AUTH_ERRORS['flow.not_found'])
+    }
     if (!isAppError(error)) {
       await report('the account could not be written', 500)
     }

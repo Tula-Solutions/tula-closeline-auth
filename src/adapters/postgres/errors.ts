@@ -22,3 +22,18 @@ export function isUniqueViolation(error: unknown): boolean {
   }
   return false
 }
+
+/**
+ * Whether an error carries the given SQLSTATE, raw or wrapped by Drizzle in `cause`.
+ *
+ * @param error - The caught error.
+ * @param code - The five-character SQLSTATE, e.g. `40001`.
+ */
+export function hasSqlState(error: unknown, code: string): boolean {
+  for (let current = error; current instanceof Object; current = (current as Error).cause) {
+    if ((current as { code?: unknown }).code === code) {
+      return true
+    }
+  }
+  return false
+}

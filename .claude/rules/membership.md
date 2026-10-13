@@ -176,22 +176,21 @@ double submit). That abandon belongs to the sweep (below). Core frees the user i
 idempotently on the user id, so a client retrying one attempt after an abandon gets a fresh
 Organization.
 
-## The abandon case and the sweep (hub issue 36, db `0.8.0`)
+## The abandon case and the sweep (hub issue 36, db `0.9.0`)
 
 **Recording.** An Owner sign-up (never an invitation) writes a case in `auth.abandon_cases`
 before core is asked, in its own committed transaction: case id = attempt id, user id, attempt
 expiry, Organization id unknown, grace `ABANDON_GRACE_MS` (5 s call bound + 25 s skew margin; the
 table's floor is 10 s). If recording fails the request fails with nothing created at core. After
 core answers, `learn` fills the Organization id (best effort; a failure leaves it for the sweep to
-find; a unique violation resolves the case `gave_up` in a new transaction and reports both ids).
-`users.create` runs `ABANDON_RESOLVE` (`done`) in the same transaction as the account, so a
-committed account never leaves an open case. Added per Owner sign-up: 3 statements (record,
-learn, and the resolve inside the account transaction), 2 extra short transactions. The db has no
-"not needed" outcome: `done` means the case is finished and nothing is owed (also used when the
-account exists or core holds no Organization); `refused` and `gave_up` are the two a person must
-look at. Residual: a retry of an attempt whose case was already resolved finds the record
-silently refused (`on conflict do nothing`); the holder check in `verifyEmail` stops it unless the
-other holder is deleted.
+find; a unique violation is reported by both ids and the case is left open: if the account commits
+it settles the case, otherwise the sweep meets the conflict and gives it up).
+`users.create` runs `ABANDON_SETTLE` as the last statement of the account transaction. Added per
+Owner sign-up: 3 statements (record, learn, settle inside the account transaction), 2 extra short
+transactions. Outcomes: `done` = core removed the Organization; `not_needed` = nothing to remove
+(the account exists, or core holds none); `refused` and `gave_up` = a person reconciles. A retry
+of an attempt whose case is resolved or claimed (and has no account) fails before core is asked,
+as for an expired attempt (`flow.not_found`); with an account it completes as before.
 
 **The sweep** (`modules/abandon`, `start` in `server.ts`, every `ABANDON_SWEEP_INTERVAL_MS`) has
 its own advisory lock `abandon-sweep`, not retention's: it calls core (seconds per case) while the
@@ -201,22 +200,30 @@ another), calls core outside any transaction, then resolves in a new one; repeat
 is full; runs `giveUpSpent` once per run after the first claim. A case is due only after the
 attempt's expiry plus grace by the database clock. For each claimed case: past
 `ABANDON_SWEEP_MAX_ATTEMPTS` (40) claims it is resolved `gave_up` and reported; an account for
-the user id exists means resolve `done`, no call; an unlearned case is looked up by user id with
+the user id exists means resolve `not_needed`, no call; an unlearned case is looked up by user id with
 the membership lookup (the one call that finds an Organization by user: none means core made
-nothing, resolve `done`; a lookup failure leaves the case); then `Membership.abandon` with
+nothing, resolve `not_needed`; a lookup failure leaves the case); then `Membership.abandon` with
 key `abandon:<attempt id>`: 200 resolve `done`, 409 resolve `refused` and report (once: only the
 run whose resolve returned a row reports), 503 or network failure leaves the case for its next
 lease. A resolve that returns no row (lost lease) is not an error. Ids only in logs and reports.
 
-**Why abandoning is safe.** The account check and the call to core are not atomic. The ordering
-argument: a case is claimed only after expiry + grace (the table's `abandon_cases_due_after_expiry`
-check keeps it so); a request that loaded the attempt before expiry holds it for at most the 5 s
-call plus a few statements, so none can commit an account for this attempt after that point, and
-a read that found none stays true. Core's own guard (sole member is the user, under 24 hours, not
-suspended) is the second line. Do not shorten the grace below the call bound; do not add a path
-that writes an account for an expired attempt. Tests that move the fixed clock must back-date
-rows in Postgres (the database clock decides): see `abandon.integration.ts`.
+**Why abandoning is safe.** The account check and the call to core are not atomic, so the
+guarantee is a row lock, not a clock. `ABANDON_SETTLE` (the account transaction's last statement)
+and the sweep's claim lock the same case row and both need it untouched (`attempts = 0` for the
+settle, unresolved and `attempts < 100` for the claim), both at READ COMMITTED. If the settle
+locks first the claim skips the row and the case can never be claimed; if the claim committed
+first the settle returns no row (or SQLSTATE 40001, treated the same), the whole account
+transaction rolls back (no user row, no session, no cookie or token) and `AbandonCaseClaimed`
+becomes `flow.not_found`, the answer for an expired attempt: the person signs up again, and a
+later sweep run abandons the Organization that run claimed (core's guard still applies). So an
+account and a claimed case cannot both exist, whatever the clocks say or however long a request
+stalled. The grace (`ABANDON_GRACE_MS`) and the table's `abandon_cases_due_after_expiry` check
+only avoid wasted claims and lost sign-ups; do not rely on them for safety. The sweep's account
+read stays as a cheap short cut, and as the only guard for an account written without a settle.
+Core's own guard (sole member is the user, under 24 hours, not suspended) is a further line. Never
+add a path that writes an Owner's account without the settle. Tests that move the fixed clock
+must back-date rows in Postgres (the database clock decides): see `abandon.integration.ts`.
 
 **Still open:** the in-request abandon of the narrow unique-violation case resolves its case
-(`done` or `refused`, `unfinished` stays open). An error inside the account transaction is only
-reported and left to the sweep.
+(`done` or `refused`, `unfinished` stays open). An unexpected error inside the account transaction
+is only reported and left to the sweep, which abandons once the case is due and no account exists.
