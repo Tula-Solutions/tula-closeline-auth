@@ -36,6 +36,13 @@ const schema = z
     HASH_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(4),
     /** How many more may wait for a hash slot; past that a request gets a 503 at once. */
     HASH_QUEUE: z.coerce.number().int().min(0).max(1_000).default(16),
+    /**
+     * How many sign-in password verifications run at once. A lane of its own, so a flood of
+     * sign-ups (which hash) cannot shed a sign-in. Each takes about 64 MiB and a core.
+     */
+    SIGN_IN_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(4),
+    /** How many more may wait for a sign-in slot; past that a request gets a 503 at once. */
+    SIGN_IN_QUEUE: z.coerce.number().int().min(0).max(1_000).default(16),
     /** How many breached-password lookups run at once. */
     BREACH_CHECK_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(8),
     /** How many more may wait for a lookup slot; past that a request gets a 503 at once. */

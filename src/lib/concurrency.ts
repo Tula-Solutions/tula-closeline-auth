@@ -57,8 +57,10 @@ export function createConcurrencyLimiter(options: ConcurrencyOptions): Concurren
 
 /** The limiters for the work that costs the most per request. */
 export type WorkLimits = {
-  /** Password hashing and verification (argon2id, 64 MiB each). */
+  /** Sign-up password hashing (argon2id, 64 MiB each). */
   hash: ConcurrencyLimiter
+  /** Sign-in password verification, in its own lane so sign-up traffic cannot shed a sign-in. */
+  signIn: ConcurrencyLimiter
   /** The breached-password lookup (an outbound HTTP call that waits on a third party). */
   breach: ConcurrencyLimiter
 }
@@ -66,16 +68,23 @@ export type WorkLimits = {
 /**
  * Builds the limiters from configuration.
  *
- * @param env - The sizes: concurrency and queue for hashing and for the breach lookup.
+ * @param env - The sizes: concurrency and queue for sign-up hashing, sign-in verification and
+ *   the breach lookup.
  */
 export function createWorkLimits(env: {
   HASH_CONCURRENCY: number
   HASH_QUEUE: number
+  SIGN_IN_CONCURRENCY: number
+  SIGN_IN_QUEUE: number
   BREACH_CHECK_CONCURRENCY: number
   BREACH_CHECK_QUEUE: number
 }): WorkLimits {
   return {
     hash: createConcurrencyLimiter({ concurrency: env.HASH_CONCURRENCY, queue: env.HASH_QUEUE }),
+    signIn: createConcurrencyLimiter({
+      concurrency: env.SIGN_IN_CONCURRENCY,
+      queue: env.SIGN_IN_QUEUE,
+    }),
     breach: createConcurrencyLimiter({
       concurrency: env.BREACH_CHECK_CONCURRENCY,
       queue: env.BREACH_CHECK_QUEUE,

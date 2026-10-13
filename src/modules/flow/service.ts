@@ -170,17 +170,22 @@ export async function signUp(
   const firstName = input.firstName?.trim() || null
   const lastName = input.lastName?.trim() || null
   // Cheapest first, so a request that will be refused costs as little as possible: the local
-  // policy, then the per-address send limit, and only then the breach lookup (a third party) and
-  // the hash (64 MiB, a core). An address over its hourly cap makes neither, and a refusal
-  // writes nothing.
+  // policy, then a hash slot, and inside it the per-address send limit, the breach lookup (a
+  // third party, with a slot of its own) and the hash (64 MiB, a core). A request is counted
+  // against an address only once it holds the slots it needs, so one that is shed (a 503 the
+  // client retries) costs the address nothing, and an address over its hourly cap makes neither
+  // the lookup nor the hash. A refusal writes nothing.
   const normalizedPassword = Passwords.checkPolicy(input.password, {
     email,
     firstName: firstName ?? undefined,
     lastName: lastName ?? undefined,
   })
-  await Verification.enforceSendLimits(deps, tenant, identifier)
-  await Passwords.checkBreach(deps, normalizedPassword)
-  const passwordHash = await Passwords.hash(deps, input.password)
+  const passwordHash = await Passwords.inLane(deps, 'hash', async () => {
+    await Passwords.checkBreach(deps, normalizedPassword, () =>
+      Verification.enforceSendLimits(deps, tenant, identifier)
+    )
+    return Passwords.hashHeld(input.password)
+  })
 
   // An address that already has an account gets an attempt that looks the same and can never
   // complete, and the account's owner gets a notice instead of a code: starting a sign-up must
@@ -421,33 +426,41 @@ export async function submitPassword(
   if (attempt.status !== 'needs_password') {
     throw fail(AUTH_ERRORS['flow.invalid_step'])
   }
-  // Counted as a failure up front and cleared on success, so parallel guesses cannot all slip
-  // through. It happens before the lookup, so unknown identifiers lock out exactly the same.
-  const lockKey = signInLockKey(tenant.environmentId, attempt.identifier)
-  const lock = await deps.lockout.attempt(lockKey, CREDENTIAL_LOCKOUT, deps.clock.now())
-  if (!lock.allowed) {
-    throw rateLimited(ERRORS['rate.limited'], lock.retryAfterMs)
-  }
-
-  const found = await deps.users.findByEmailWithPassword(tenant.environmentId, attempt.identifier)
-  if (!(await Passwords.verify(deps, found?.passwordHash ?? null, input.password)) || !found) {
+  // A password no account can have is refused before anything is counted, as a wrong one.
+  if (!Passwords.withinLimit(input.password)) {
     throw fail(AUTH_ERRORS['auth.invalid_credentials'])
   }
-  await deps.lockout.clear(lockKey)
-  const { user } = found
-  if (user.bannedAt !== null) {
-    throw fail(AUTH_ERRORS['auth.user_banned'])
-  }
-  if (found.passwordHash && Passwords.needsRehash(found.passwordHash)) {
-    // Only if the stored hash is still the one just verified.
-    await deps.users.upgradePasswordHash(
-      tenant.environmentId,
-      user.id,
-      found.passwordHash,
-      await Passwords.hash(deps, input.password),
-      deps.clock.now()
-    )
-  }
+  // Everything that counts against the account happens inside a sign-in slot, so a request that
+  // is shed (a 503 the client retries) is never counted. The try is counted as a failure up
+  // front and cleared on success, so parallel guesses cannot all slip through. It happens before
+  // the lookup, so unknown identifiers lock out exactly the same, and an unknown identifier still
+  // pays for one verification in the same lane.
+  const lockKey = signInLockKey(tenant.environmentId, attempt.identifier)
+  const user = await Passwords.inLane(deps, 'signIn', async () => {
+    const lock = await deps.lockout.attempt(lockKey, CREDENTIAL_LOCKOUT, deps.clock.now())
+    if (!lock.allowed) {
+      throw rateLimited(ERRORS['rate.limited'], lock.retryAfterMs)
+    }
+    const found = await deps.users.findByEmailWithPassword(tenant.environmentId, attempt.identifier)
+    if (!(await Passwords.verifyHeld(found?.passwordHash ?? null, input.password)) || !found) {
+      throw fail(AUTH_ERRORS['auth.invalid_credentials'])
+    }
+    await deps.lockout.clear(lockKey)
+    if (found.user.bannedAt !== null) {
+      throw fail(AUTH_ERRORS['auth.user_banned'])
+    }
+    if (found.passwordHash && Passwords.needsRehash(found.passwordHash)) {
+      // Only if the stored hash is still the one just verified.
+      await deps.users.upgradePasswordHash(
+        tenant.environmentId,
+        found.user.id,
+        found.passwordHash,
+        await Passwords.hashHeld(input.password),
+        deps.clock.now()
+      )
+    }
+    return found.user
+  })
 
   // Before the attempt is spent and before any session: no Organization, no tokens.
   const membership = await Membership.of(deps, formatId('usr', user.id) as UserId)

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { decodeJwt } from 'jose'
 import { formatId, type UserId } from 'tula-closeline-contract'
 import { createApp } from '~/app'
@@ -393,13 +393,13 @@ describe('sign-in', () => {
     return { started, password }
   }
 
-  test('with the hash limiter full the password step of a sign-in is a 503 with Retry-After', async () => {
+  test('with the sign-in limiter full the password step of a sign-in is a 503 with Retry-After', async () => {
     const { deps, app, signedUp } = await setup()
     const { email } = await signedUp()
     const { password } = await startSignIn(app, email)
     deps.limits = {
       ...deps.limits,
-      hash: {
+      signIn: {
         run: async () => {
           throw new Saturated()
         },
@@ -483,6 +483,22 @@ describe('sign-in', () => {
 
     expect(victim.status).toBe(429)
     expect(victim.body).toMatchObject({ error: { code: 'rate.limited' } })
+  })
+
+  test('a password longer than any account can have is a wrong password and is never counted', async () => {
+    const { app, signedUp } = await setup()
+    const { email } = await signedUp()
+    const { password } = await startSignIn(app, email)
+
+    const refused = []
+    for (let n = 0; n < 8; n++) {
+      refused.push(await password('x'.repeat(2_000)))
+    }
+    const right = await password(PASSWORD)
+
+    expect(refused.map((reply) => reply.status)).toEqual(Array(8).fill(401))
+    expect(refused[0]?.body).toMatchObject({ error: { code: 'auth.invalid_credentials' } })
+    expect(right.status).toBe(200)
   })
 
   test('is locked out after repeated wrong passwords, even for the right one', async () => {
@@ -594,35 +610,34 @@ describe('what a sign-up costs before it is allowed', () => {
     return { watched, seen }
   }
 
+  const hashes = spyOn(Bun.password, 'hash')
+  afterEach(() => hashes.mockClear())
+
   test('a sign-up over the hourly cap makes no breach lookup and no hash', async () => {
     const { deps, signUp } = await setup()
-    const hashing = watching(deps.limits.hash)
-    deps.limits = { ...deps.limits, hash: hashing.watched }
     for (let n = 0; n < 5; n++) {
       expect((await signUp('cap@northline.app')).status).toBe(200)
       deps.clock.advance('2m')
     }
     const checksBefore = deps.breachChecker.checks
-    const hashesBefore = hashing.seen.runs
+    const hashesBefore = hashes.mock.calls.length
 
     const over = await signUp('cap@northline.app')
 
     expect(over.status).toBe(429)
     expect(over.body).toMatchObject({ error: { code: 'verification.too_many_attempts' } })
     expect(deps.breachChecker.checks).toBe(checksBefore)
-    expect(hashing.seen.runs).toBe(hashesBefore)
+    expect(hashes.mock.calls.length).toBe(hashesBefore)
   })
 
   test('a password the policy refuses makes no breach lookup, no hash and spends no send', async () => {
     const { deps, signUp } = await setup()
-    const hashing = watching(deps.limits.hash)
-    deps.limits = { ...deps.limits, hash: hashing.watched }
 
     const refused = await call(createApp(deps), 'POST', '/v1/client/sign-ups', {
       body: { email: 'weak@northline.app', password: 'short', organizationName: 'Northline' },
     })
     const checksAfterRefusal = deps.breachChecker.checks
-    const hashesAfterRefusal = hashing.seen.runs
+    const hashesAfterRefusal = hashes.mock.calls.length
     const retried = await signUp('weak@northline.app')
 
     expect(refused.status).toBe(422)
@@ -863,4 +878,133 @@ describe('guards that must hold on their own', () => {
       expect(claims.region).toBe(region)
     }
   )
+})
+
+describe('a request that is shed is never counted against anyone', () => {
+  /** Holds one slot of a limiter until `release` is called, so the limiter can be filled for real. */
+  function fill(limiter: ConcurrencyLimiter, slots: number) {
+    let release: () => void = () => {}
+    const open = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const held = Array.from({ length: slots }, () => limiter.run(() => open))
+    return { release: () => release(), done: Promise.all(held) }
+  }
+
+  async function sharedSetup() {
+    const deps = await createReadyDeps({
+      env: { HASH_CONCURRENCY: '1', HASH_QUEUE: '0', SIGN_IN_CONCURRENCY: '1', SIGN_IN_QUEUE: '0' },
+    })
+    const app = createApp(deps)
+    const signUp = (email: string) =>
+      call(app, 'POST', '/v1/client/sign-ups', {
+        body: { email, password: PASSWORD, organizationName: 'Northline' },
+      })
+    const startSignIn = async (identifier: string) => {
+      const started = await call(app, 'POST', '/v1/client/sign-ins', { body: { identifier } })
+      return (password: string) =>
+        call(app, 'POST', `/v1/client/sign-ins/${text(started.body, 'id')}/password`, {
+          attempt: text(started.body, 'attemptSecret'),
+          body: { password },
+        })
+    }
+    return { deps, app, signUp, startSignIn }
+  }
+
+  test('six shed password submits leave the account unlocked: the right password then signs in', async () => {
+    const { deps, app, signUp, startSignIn } = await sharedSetup()
+    const email = 'shed@northline.app'
+    const started = await signUp(email)
+    await call(app, 'POST', `/v1/client/sign-ups/${text(started.body, 'id')}/verify-email`, {
+      attempt: text(started.body, 'attemptSecret'),
+      body: { code: emailedCode(deps, email) },
+    })
+    const password = await startSignIn(email)
+    const full = fill(deps.limits.signIn, 1)
+
+    const shed = []
+    for (let n = 0; n < 6; n++) {
+      shed.push(await password(`${PASSWORD}-wrong`))
+    }
+    full.release()
+    await full.done
+    const after = await password(PASSWORD)
+
+    expect(shed.map((reply) => reply.status)).toEqual(Array(6).fill(503))
+    expect(after.status).toBe(200)
+  })
+
+  test('a shed sign-up is not counted against the address: the retry is not rate limited', async () => {
+    const { deps, signUp } = await sharedSetup()
+    const full = fill(deps.limits.hash, 1)
+
+    const shed = await signUp('retry@northline.app')
+    full.release()
+    await full.done
+    const retried = await signUp('retry@northline.app')
+
+    expect(shed.status).toBe(503)
+    expect(retried.status).toBe(200)
+  })
+
+  test('a sign-up shed at the breach lookup is not counted against the address either', async () => {
+    const { deps, signUp } = await sharedSetup()
+    const full = fill(
+      deps.limits.breach,
+      deps.env.BREACH_CHECK_CONCURRENCY + deps.env.BREACH_CHECK_QUEUE
+    )
+
+    const shed = await signUp('breach@northline.app')
+    full.release()
+    await full.done
+    const retried = await signUp('breach@northline.app')
+
+    expect(shed.status).toBe(503)
+    expect(retried.status).toBe(200)
+  })
+
+  test('a full sign-up lane sheds no sign-in', async () => {
+    const { deps, app, signUp, startSignIn } = await sharedSetup()
+    const email = 'lane@northline.app'
+    const started = await signUp(email)
+    await call(app, 'POST', `/v1/client/sign-ups/${text(started.body, 'id')}/verify-email`, {
+      attempt: text(started.body, 'attemptSecret'),
+      body: { code: emailedCode(deps, email) },
+    })
+    const password = await startSignIn(email)
+    const full = fill(deps.limits.hash, 1)
+
+    const signedIn = await password(PASSWORD)
+    const shedSignUp = await signUp('other@northline.app')
+    full.release()
+    await full.done
+
+    expect(signedIn.status).toBe(200)
+    expect(shedSignUp.status).toBe(503)
+  })
+
+  test('a full sign-in lane sheds no sign-up', async () => {
+    const { deps, signUp } = await sharedSetup()
+    const full = fill(deps.limits.signIn, 1)
+
+    const reply = await signUp('lane2@northline.app')
+    full.release()
+    await full.done
+
+    expect(reply.status).toBe(200)
+  })
+
+  test('an unknown identifier is shed like a known one, and its dummy verify uses the sign-in lane', async () => {
+    const { deps, startSignIn } = await sharedSetup()
+    const password = await startSignIn('nobody@northline.app')
+    const full = fill(deps.limits.signIn, 1)
+
+    const shed = await password(PASSWORD)
+    full.release()
+    await full.done
+    const after = await password(PASSWORD)
+
+    expect(shed.status).toBe(503)
+    expect(after.status).toBe(401)
+  })
 })

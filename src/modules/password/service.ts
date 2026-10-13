@@ -38,7 +38,23 @@ const POLICY_ERRORS = {
 /** What password work needs from the container: the limiters that bound it. */
 export type PasswordDeps = Pick<Container, 'limits'>
 
-/** Runs `work` inside a limiter; a full limiter is a 503 the client retries, not a fault. */
+/** The lane a unit of password work runs in: sign-up hashing or sign-in verification. */
+export type Lane = 'hash' | 'signIn'
+
+/**
+ * Runs `work` in a lane's limiter; a full limiter is a 503 the client retries, not a fault.
+ *
+ * The caller does everything that counts against a person (a send, a failed try) inside `work`,
+ * so a request that is shed was never counted.
+ */
+export async function inLane<T>(
+  deps: PasswordDeps,
+  lane: Lane,
+  work: () => Promise<T>
+): Promise<T> {
+  return limited(deps.limits[lane], work)
+}
+
 async function limited<T>(limiter: ConcurrencyLimiter, work: () => Promise<T>): Promise<T> {
   try {
     return await limiter.run(work)
@@ -56,36 +72,39 @@ function normalizeCapped(password: string): string | null {
 }
 
 /**
- * Hashes a password with argon2id after NFC normalization, inside the hash limiter.
- *
- * @throws AppError `password.too_long`, or `server.unavailable` (503) when the limiter is full.
+ * Whether a submitted password is short enough for any stored password to match. A longer one
+ * can be refused before anything is counted or hashed: no account can have it.
  */
-export async function hash(deps: PasswordDeps, password: string): Promise<string> {
+export function withinLimit(password: string): boolean {
+  return normalizeCapped(password) !== null
+}
+
+/**
+ * Hashes a password with argon2id after NFC normalization. The caller holds a slot of the lane it
+ * runs in ({@link inLane}); this does not take one.
+ *
+ * @throws AppError `password.too_long`.
+ */
+export async function hashHeld(password: string): Promise<string> {
   const normalized = normalizeCapped(password)
   if (normalized === null) {
     throw fail(AUTH_ERRORS['password.too_long'], { max: MAX_PASSWORD_LENGTH })
   }
-  return limited(deps.limits.hash, () => Bun.password.hash(normalized, HASH_OPTIONS))
+  return Bun.password.hash(normalized, HASH_OPTIONS)
 }
 
 /**
  * Checks a password against a stored hash. With no hash it still pays for one verification (a
- * dummy hash) and answers `false`, so an unknown account takes as long as a known one. Runs inside
- * the hash limiter; a full limiter is `server.unavailable` (503), the same for every account.
+ * dummy hash) and answers `false`, so an unknown account takes as long as a known one. The caller
+ * holds a slot of the sign-in lane ({@link inLane}); this does not take one.
  */
-export async function verify(
-  deps: PasswordDeps,
-  storedHash: string | null,
-  password: string
-): Promise<boolean> {
+export async function verifyHeld(storedHash: string | null, password: string): Promise<boolean> {
   const normalized = normalizeCapped(password)
   // No stored password can be this long, so rejecting early leaks nothing about the account.
   if (normalized === null) {
     return false
   }
-  const matches = await limited(deps.limits.hash, () =>
-    Bun.password.verify(normalized, storedHash ?? DUMMY_HASH)
-  )
+  const matches = await Bun.password.verify(normalized, storedHash ?? DUMMY_HASH)
   return storedHash !== null && matches
 }
 
@@ -124,21 +143,27 @@ export function checkPolicy(password: string, userInfo: PasswordUserInfo = {}): 
  * Refuses a password that appears in a known breach, inside the breach limiter. A lookup that
  * cannot be made lets the password through.
  *
+ * @param admitted - Runs once the request holds a lookup slot and before the lookup, so what it
+ *   counts (a send against an address) is never charged to a request that was shed.
  * @throws AppError `password.breached` (422), or `server.unavailable` (503) when the limiter is
  *   full.
  */
 export async function checkBreach(
   deps: Pick<Container, 'breachChecker' | 'limits'>,
-  normalized: string
+  normalized: string,
+  admitted?: () => Promise<void>
 ): Promise<void> {
-  if (
-    PASSWORD_POLICY.breachCheck === 'block' &&
-    (await limited(deps.limits.breach, () => deps.breachChecker.check(normalized))) === 'breached'
-  ) {
-    throw fail(AUTH_ERRORS['password.breached'], {
-      errors: [{ field: 'password', code: 'password.breached' }],
-    })
-  }
+  await limited(deps.limits.breach, async () => {
+    await admitted?.()
+    if (
+      PASSWORD_POLICY.breachCheck === 'block' &&
+      (await deps.breachChecker.check(normalized)) === 'breached'
+    ) {
+      throw fail(AUTH_ERRORS['password.breached'], {
+        errors: [{ field: 'password', code: 'password.breached' }],
+      })
+    }
+  })
 }
 
 /**

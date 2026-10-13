@@ -18,6 +18,8 @@ test('configuration falls back to defaults for everything but the environment', 
     RETENTION_RUN_TIMEOUT_MS: 30_000,
     HASH_CONCURRENCY: 4,
     HASH_QUEUE: 16,
+    SIGN_IN_CONCURRENCY: 4,
+    SIGN_IN_QUEUE: 16,
     BREACH_CHECK_CONCURRENCY: 8,
     BREACH_CHECK_QUEUE: 16,
   })
@@ -43,6 +45,8 @@ test.each([
   ['a purge run timeout of zero', { RETENTION_RUN_TIMEOUT_MS: '0' }],
   ['no hash slots', { HASH_CONCURRENCY: '0' }],
   ['a negative hash queue', { HASH_QUEUE: '-1' }],
+  ['no sign-in slots', { SIGN_IN_CONCURRENCY: '0' }],
+  ['a sign-in queue above 1000', { SIGN_IN_QUEUE: '1001' }],
   ['no breach lookup slots', { BREACH_CHECK_CONCURRENCY: '0' }],
   ['a breach queue above 1000', { BREACH_CHECK_QUEUE: '1001' }],
 ])('configuration rejects %s at boot', (_name, source) => {

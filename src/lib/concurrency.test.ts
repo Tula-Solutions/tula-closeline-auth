@@ -82,6 +82,8 @@ describe('the concurrency limiter', () => {
     const limits = createWorkLimits({
       HASH_CONCURRENCY: 1,
       HASH_QUEUE: 0,
+      SIGN_IN_CONCURRENCY: 1,
+      SIGN_IN_QUEUE: 0,
       BREACH_CHECK_CONCURRENCY: 2,
       BREACH_CHECK_QUEUE: 0,
     })
@@ -90,6 +92,7 @@ describe('the concurrency limiter', () => {
 
     await expect(limits.hash.run(async () => 1)).rejects.toBeInstanceOf(Saturated)
     expect(await limits.breach.run(async () => 2)).toBe(2)
+    expect(await limits.signIn.run(async () => 3)).toBe(3)
 
     held.open()
     await hashing

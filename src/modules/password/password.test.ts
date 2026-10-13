@@ -5,22 +5,44 @@ import { evaluatePassword, PASSWORD_POLICY } from './rules'
 import * as Passwords from './service'
 
 const { limits } = createTestDeps()
-const deps = { limits }
+
+describe('lanes', () => {
+  test('work runs in the lane asked for, and a full lane is a 503 for that lane only', async () => {
+    const lanes = createTestDeps({
+      env: { HASH_CONCURRENCY: '1', HASH_QUEUE: '0', SIGN_IN_CONCURRENCY: '1', SIGN_IN_QUEUE: '0' },
+    })
+    let open: () => void = () => {}
+    const held = Passwords.inLane(lanes, 'hash', () => new Promise<void>((r) => (open = r)))
+
+    await expect(Passwords.inLane(lanes, 'hash', async () => 1)).rejects.toMatchObject({
+      code: 'server.unavailable',
+    })
+    expect(await Passwords.inLane(lanes, 'signIn', async () => 2)).toBe(2)
+
+    open()
+    await held
+  })
+
+  test("a password beyond the cap is within no account's possible passwords", () => {
+    expect(Passwords.withinLimit('x'.repeat(Passwords.MAX_PASSWORD_LENGTH))).toBe(true)
+    expect(Passwords.withinLimit('x'.repeat(Passwords.MAX_PASSWORD_LENGTH + 1))).toBe(false)
+  })
+})
 
 describe('hashing', () => {
   test('uses argon2id with the source parameters, and a hash verifies only its own password', async () => {
-    const hash = await Passwords.hash(deps, 'correct horse battery')
+    const hash = await Passwords.hashHeld('correct horse battery')
 
     expect(hash).toStartWith('$argon2id$v=19$m=65536,t=2,p=1$')
     expect(Passwords.needsRehash(hash)).toBe(false)
-    expect(await Passwords.verify(deps, hash, 'correct horse battery')).toBe(true)
-    expect(await Passwords.verify(deps, hash, 'correct horse batterx')).toBe(false)
+    expect(await Passwords.verifyHeld(hash, 'correct horse battery')).toBe(true)
+    expect(await Passwords.verifyHeld(hash, 'correct horse batterx')).toBe(false)
   })
 
   test('treats composed and decomposed forms of one passphrase as the same', async () => {
-    const hash = await Passwords.hash(deps, 'café au lait 123')
+    const hash = await Passwords.hashHeld('café au lait 123')
 
-    expect(await Passwords.verify(deps, hash, 'café au lait 123')).toBe(true)
+    expect(await Passwords.verifyHeld(hash, 'café au lait 123')).toBe(true)
   })
 
   test('a hash made with other parameters is due for rehashing', () => {
@@ -28,19 +50,15 @@ describe('hashing', () => {
   })
 
   test('with no stored hash it still answers false, and so does a password beyond the cap', async () => {
-    expect(await Passwords.verify(deps, null, 'anything at all')).toBe(false)
+    expect(await Passwords.verifyHeld(null, 'anything at all')).toBe(false)
     expect(
-      await Passwords.verify(
-        deps,
-        '$argon2id$x',
-        'x'.repeat(Passwords.MAX_PASSWORD_LENGTH * 16 + 1)
-      )
+      await Passwords.verifyHeld('$argon2id$x', 'x'.repeat(Passwords.MAX_PASSWORD_LENGTH * 16 + 1))
     ).toBe(false)
   })
 
   test('refuses to hash a password longer than the cap', async () => {
     await expect(
-      Passwords.hash(deps, 'x'.repeat(Passwords.MAX_PASSWORD_LENGTH + 1))
+      Passwords.hashHeld('x'.repeat(Passwords.MAX_PASSWORD_LENGTH + 1))
     ).rejects.toMatchObject({
       code: 'password.too_long',
     })
