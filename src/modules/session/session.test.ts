@@ -335,13 +335,13 @@ describe('refreshing', () => {
     const FAR = new Date('2100-01-01T00:00:00Z')
     type Limits = { idle: Date; absolute: Date; token: Date }
 
-    /** Core takes 4 s, and the stored rows say when each limit falls (a second or two in). */
-    async function withLimits(limits: (soon: Date) => Limits) {
+    /** Core takes 4 s, and the stored rows say when each limit falls: `soon` is `offsetMs` from the new `now`. */
+    async function withLimits(limits: (soon: Date) => Limits, offsetMs: number) {
       const ctx = await setup()
       const { deps } = ctx
       const environmentId = deps.tenant.current?.environmentId ?? ''
       const read = deps.sessions.findToken.bind(deps.sessions)
-      const set = limits(new Date(deps.clock.now().getTime() + 2000))
+      const set = limits(new Date(deps.clock.now().getTime() + 4000 + offsetMs))
       deps.sessions.findToken = async (...args) => {
         const found = await read(...args)
         return (
@@ -363,20 +363,74 @@ describe('refreshing', () => {
       return { ...ctx, environmentId, read }
     }
 
+    // The limit falls 2 s before, and exactly at, the time the clock reads after core answers.
     test.each([
       ['idle', (soon: Date) => ({ idle: soon, absolute: FAR, token: FAR })],
       ['absolute', (soon: Date) => ({ idle: FAR, absolute: soon, token: FAR })],
       ['token', (soon: Date) => ({ idle: FAR, absolute: FAR, token: soon })],
     ])('the %s expiry refuses the refresh and rotates nothing', async (_name, limits) => {
-      const { deps, refresh, refreshToken, read, environmentId } = await withLimits(limits)
+      for (const offsetMs of [-2000, 0]) {
+        const { deps, refresh, refreshToken, read, environmentId } = await withLimits(
+          limits,
+          offsetMs
+        )
 
-      const reply = await refresh(refreshToken)
+        const reply = await refresh(refreshToken)
 
-      expect(reply.status).toBe(401)
-      expect(reply.body).toMatchObject({ error: { code: 'session.expired' } })
-      expect((await read(environmentId, sha256Hex(refreshToken)))?.token.usedAt).toBeNull()
-      expect(deps.membership.calls.lookup).toBeGreaterThan(0)
+        expect(reply.status).toBe(401)
+        expect(reply.body).toMatchObject({ error: { code: 'session.expired' } })
+        expect((await read(environmentId, sha256Hex(refreshToken)))?.token.usedAt).toBeNull()
+        expect(deps.membership.calls.lookup).toBeGreaterThan(0)
+      }
     })
+
+    test.each([
+      ['2 s before', -2000],
+      ['exactly at', 0],
+    ])(
+      'a replay inside the grace window is refused when the idle expiry falls %s the new time',
+      async (_name, offsetMs) => {
+        const { deps, refresh, refreshToken } = await setup()
+        await refresh(refreshToken)
+        deps.clock.advance('2s')
+        const forUser = deps.membership.forUser
+        deps.membership.forUser = async (userId, signal) => {
+          deps.clock.advance('4s')
+          const read = deps.sessions.findToken.bind(deps.sessions)
+          const idleExpiresAt = new Date(deps.clock.now().getTime() + offsetMs)
+          deps.sessions.findToken = async (...args) => {
+            const found = await read(...args)
+            return found && { ...found, session: { ...found.session, idleExpiresAt } }
+          }
+          return forUser(userId, signal)
+        }
+
+        const replay = await refresh(refreshToken)
+
+        expect(replay.status).toBe(401)
+        expect(replay.body).toMatchObject({ error: { code: 'session.expired' } })
+        expect(JSON.stringify(replay.body)).not.toContain('tula_rt_')
+        expect(JSON.stringify(replay.body)).not.toContain('accessToken')
+      }
+    )
+  })
+
+  test('KNOWN TOLERANCE: a user banned while core is being asked gets one more rotation, and the next refresh is refused', async () => {
+    const { deps, refresh, refreshToken } = await setup()
+    const environmentId = deps.tenant.current?.environmentId ?? ''
+    const user = await deps.users.findByEmail(environmentId, 'maya@northline.app')
+    const real = deps.membership.forUser
+    deps.membership.forUser = async (userId, signal) => {
+      deps.users.ban(user?.id ?? '', deps.clock.now())
+      return real(userId, signal)
+    }
+
+    const during = await refresh(refreshToken)
+    const next = await refresh(text(during.body, 'refreshToken'))
+
+    expect(during.status).toBe(200)
+    expect(next.status).toBe(403)
+    expect(next.body).toMatchObject({ error: { code: 'auth.user_banned' } })
   })
 
   test('a role change reaches the next token', async () => {

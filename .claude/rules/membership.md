@@ -88,6 +88,13 @@ session, user and next token (ended, revoked, banned or expired, or the next tok
 spent, is refused as the rotation path would), and a rotation refuses with `session.expired`
 when the session's or the token's expiry has passed by the new time.
 
+Two tolerances are accepted. The rotation path does not read the user's ban again after the call
+to core, so a user banned during the call (at most 5 s) gets one more rotation and one access
+token (60 s at most), and the next refresh refuses; the replay path does read it again (a test
+pins this). And a client that retries a slow refresh, then uses the late first response while the
+retry is still waiting on core, is signed out as reuse: the same outcome the check before the
+call gives when the two requests arrive in the other order.
+
 ## Calls to core are capped
 
 The adapter runs at most `CORE_CONCURRENCY` (default 64) requests at once, with `CORE_QUEUE`
