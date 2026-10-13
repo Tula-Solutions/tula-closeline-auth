@@ -141,6 +141,12 @@ scenarios against real Postgres as the `closeline_auth` role (`POSTGRES_PORT` mo
   `tula-closeline-db` release (a separate ticket). Until then both maps are capped at 50,000 keys:
   expired keys go first, then the oldest key that is not locked or at its limit; a locked key is
   never evicted, and if every key is locked a new key is refused (fails closed).
+- **A stranger can lock a victim out of password sign-in.** Lockout is keyed by address and counted
+  up front, so about 11 wrong tries on someone's address (then one every 15 minutes) keep their
+  correct password refused (429 `rate.limited`) until the failures are forgotten after an hour of
+  quiet. Inherited from the source design; `flow.test.ts` pins it as a known limitation. A
+  follow-up ticket decides the redesign (e.g. key on address plus a device cookie, or exempt a
+  known-good device).
 - No mail provider: the runtime mailer fails with `mail.unavailable`. Tests use the memory mailer.
 - No per-IP limit on sign-up and sign-in starts: it needs a trusted-proxy decision. What bounds
   the cost of a flood instead: a sign-up checks the password policy (local), then counts the send

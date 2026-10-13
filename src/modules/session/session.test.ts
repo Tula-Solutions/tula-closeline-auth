@@ -3,8 +3,10 @@ import type { OrganizationId, UserId } from 'tula-closeline-contract'
 import { createStaticKeySet, createTokenVerifier } from 'tula-closeline-kit'
 import { createApp } from '~/app'
 import { publicUrl } from '~/env'
+import * as Bootstrap from '~/modules/bootstrap/service'
 import { jwksSchema } from '~/modules/jwks/schema'
 import * as Jwks from '~/modules/jwks/service'
+import * as Tokens from '~/modules/token/service'
 import { createReadyDeps } from '~/testing'
 import { at, call, emailedCode, text } from '~/testing/client'
 import { REUSE_GRACE_MS } from './service'
@@ -358,5 +360,63 @@ describe('a cursor the database cannot use', () => {
     const page = await call(app, 'GET', '/v1/client/sessions?cursor=%25%25%25', { accessToken })
 
     expect(page.status).toBe(400)
+  })
+})
+
+describe('a live access token does not outlast what it stands for', () => {
+  test('a token whose session has timed out is refused as expired', async () => {
+    const { deps, app, accessToken } = await setup()
+    const findById = deps.sessions.findById.bind(deps.sessions)
+    // The token is good for 60 seconds; the session behind it ran out of idle time just now.
+    deps.sessions.findById = async (environmentId, id) => {
+      const session = await findById(environmentId, id)
+      return session && { ...session, idleExpiresAt: new Date(deps.clock.now().getTime() - 1) }
+    }
+
+    const me = await call(app, 'GET', '/v1/client/me', { accessToken })
+
+    expect(me.status).toBe(401)
+    expect(at(me.body, 'error.code')).toBe('session.expired')
+  })
+
+  test('a validly signed token for one user carrying the session of another is refused', async () => {
+    const { deps, app } = await setup()
+    const tenant = Bootstrap.requireTenant(deps)
+    const other = await call(app, 'POST', '/v1/client/sign-ups', {
+      body: {
+        email: 'other@northline.app',
+        password: PASSWORD,
+        organizationName: 'Elsewhere',
+      },
+    })
+    const otherDone = await call(
+      app,
+      'POST',
+      `/v1/client/sign-ups/${text(other.body, 'id')}/verify-email`,
+      {
+        attempt: text(other.body, 'attemptSecret'),
+        body: { code: emailedCode(deps, 'other@northline.app') },
+      }
+    )
+    const first = await deps.users.findByEmail(tenant.environmentId, 'maya@northline.app')
+    const second = await deps.users.findByEmail(tenant.environmentId, 'other@northline.app')
+    const sign = await Tokens.signer(deps, tenant)
+
+    // Signed by the real key, subject = the first user, session = the second user's.
+    const forged = await sign(
+      {
+        id: text(otherDone.body, 'session.sessionId'),
+        userId: first?.id ?? '',
+        authenticatedAt: deps.clock.now(),
+        authMethods: ['pwd'],
+      },
+      { organizationId: `org_${'a'.repeat(32)}` as OrganizationId, role: 'owner' },
+      deps.clock.now()
+    )
+    const me = await call(app, 'GET', '/v1/client/me', { accessToken: forged.accessToken })
+
+    expect(second?.id).not.toBe(first?.id)
+    expect(me.status).toBe(401)
+    expect(at(me.body, 'error.code')).toBe('auth.token_invalid')
   })
 })

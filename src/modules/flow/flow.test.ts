@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { decodeJwt } from 'jose'
 import { formatId, type UserId } from 'tula-closeline-contract'
 import { createApp } from '~/app'
 import { AUTH_ERRORS } from '~/errors'
@@ -291,6 +292,29 @@ describe('sign-up', () => {
     expect(deps.mailer.outbox).toHaveLength(2)
   })
 
+  test('limits emails to one address to five an hour, counting resends and sign-ups together', async () => {
+    const { deps, app, signUp, nextEmail } = await setup()
+    const email = nextEmail()
+    const started = await signUp(email)
+    const resend = () =>
+      call(app, 'POST', `/v1/client/sign-ups/${text(started.body, 'id')}/resend-code`, {
+        attempt: text(started.body, 'attemptSecret'),
+      })
+    for (let n = 0; n < 4; n++) {
+      deps.clock.advance('61s')
+      expect((await resend()).status).toBe(200)
+    }
+    deps.clock.advance('61s')
+
+    const sixth = await resend()
+
+    expect(sixth.status).toBe(429)
+    expect(at(sixth.body, 'error.details.retryAfter')).toBeGreaterThan(60)
+    expect(deps.mailer.outbox).toHaveLength(5)
+    deps.clock.advance('1h')
+    expect((await signUp(email)).status).toBe(200)
+  })
+
   test('a mail failure keeps no attempt and says so', async () => {
     const { deps, signUp, nextEmail } = await setup()
     deps.mailer.failing = true
@@ -426,6 +450,39 @@ describe('sign-in', () => {
       accessToken: text(reply.body, 'session.accessToken'),
     })
     expect(me.status).toBe(200)
+  })
+
+  test('a successful sign-in clears the failures, so a user who mistyped a few times is never locked out', async () => {
+    const { app, signedUp } = await setup()
+    const { email } = await signedUp()
+
+    // Three wrong tries then the right one, four times over: twelve failures if none were
+    // forgotten, which would lock the account long before the end.
+    for (let round = 0; round < 4; round++) {
+      const { password } = await startSignIn(app, email)
+      for (let n = 0; n < 3; n++) {
+        expect((await password(`${PASSWORD}-wrong`)).status).toBe(401)
+      }
+      expect((await password(PASSWORD)).status).toBe(200)
+    }
+  })
+
+  test('KNOWN LIMITATION: anyone can lock a victim out of password sign-in by guessing wrong on their address', async () => {
+    // Lockout is keyed by address and counted up front, so wrong tries by a stranger lock the
+    // account's owner out too. Inherited from the source design; a follow-up ticket decides the
+    // redesign. This test pins the behaviour so a change to it is a decision, not an accident.
+    const { app, signedUp } = await setup()
+    const { email } = await signedUp()
+    for (let n = 0; n < 7; n++) {
+      const { password } = await startSignIn(app, email)
+      await password('a stranger guessing')
+    }
+
+    const { password } = await startSignIn(app, email)
+    const victim = await password(PASSWORD)
+
+    expect(victim.status).toBe(429)
+    expect(victim.body).toMatchObject({ error: { code: 'rate.limited' } })
   })
 
   test('is locked out after repeated wrong passwords, even for the right one', async () => {
@@ -750,4 +807,60 @@ describe('failures around the commit of a sign-up', () => {
     expect(reported).not.toContain(email)
     expect(deps.logLines.join('\n')).not.toContain(email)
   })
+})
+
+describe('guards that must hold on their own', () => {
+  test("an attempt of one kind is not accepted by the other kind's steps", async () => {
+    const { app, signUp, nextEmail } = await setup()
+    const signUpAttempt = await signUp(nextEmail())
+    const signInAttempt = await call(app, 'POST', '/v1/client/sign-ins', {
+      body: { identifier: nextEmail() },
+    })
+
+    const passwordOnSignUp = await call(
+      app,
+      'POST',
+      `/v1/client/sign-ins/${text(signUpAttempt.body, 'id')}/password`,
+      { attempt: text(signUpAttempt.body, 'attemptSecret'), body: { password: PASSWORD } }
+    )
+    const verifyOnSignIn = await call(
+      app,
+      'POST',
+      `/v1/client/sign-ups/${text(signInAttempt.body, 'id')}/verify-email`,
+      { attempt: text(signInAttempt.body, 'attemptSecret'), body: { code: '123456' } }
+    )
+    const resendOnSignIn = await call(
+      app,
+      'POST',
+      `/v1/client/sign-ups/${text(signInAttempt.body, 'id')}/resend-code`,
+      { attempt: text(signInAttempt.body, 'attemptSecret') }
+    )
+
+    for (const reply of [passwordOnSignUp, verifyOnSignIn, resendOnSignIn]) {
+      expect(reply.status).toBe(404)
+      expect(reply.body).toMatchObject({ error: { code: 'flow.not_found' } })
+    }
+  })
+
+  test.each(['us', 'eu'] as const)(
+    'the region in a token is the configured one (%s)',
+    async (region) => {
+      const deps = await createReadyDeps({ env: { REGION: region } })
+      const app = createApp(deps)
+      const email = 'region@northline.app'
+      const started = await call(app, 'POST', '/v1/client/sign-ups', {
+        body: { email, password: PASSWORD, organizationName: 'Northline' },
+      })
+      const done = await call(
+        app,
+        'POST',
+        `/v1/client/sign-ups/${text(started.body, 'id')}/verify-email`,
+        { attempt: text(started.body, 'attemptSecret'), body: { code: emailedCode(deps, email) } }
+      )
+
+      const claims = decodeJwt(text(done.body, 'session.accessToken'))
+
+      expect(claims.region).toBe(region)
+    }
+  )
 })
