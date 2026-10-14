@@ -83,7 +83,7 @@ export function createGoogleProvider(options: GoogleProviderOptions): OidcProvid
   const loopbackIssuer = options.issuer.startsWith('http://')
 
   /** One bounded call; `unavailable` on a network error, timeout or oversized body. */
-  async function once(url: string, init: RequestInit): Promise<Answer | 'network'> {
+  async function once(url: string, init: RequestInit): Promise<Answer | 'network' | 'oversize'> {
     try {
       const response = await doFetch(url, {
         ...init,
@@ -92,10 +92,11 @@ export function createGoogleProvider(options: GoogleProviderOptions): OidcProvid
       })
       const declared = Number(response.headers.get('content-length') ?? 0)
       if (declared > MAX_RESPONSE_BYTES) {
-        return { status: 502, text: '' }
+        await response.body?.cancel().catch(() => {})
+        return 'oversize'
       }
-      const text = await response.text()
-      return { status: response.status, text: text.length > MAX_RESPONSE_BYTES ? '' : text }
+      const text = await readCapped(response)
+      return text === undefined ? 'oversize' : { status: response.status, text }
     } catch {
       return 'network'
     }
@@ -113,6 +114,11 @@ export function createGoogleProvider(options: GoogleProviderOptions): OidcProvid
   ): Promise<Answer> {
     for (let attempt = 0; ; attempt += 1) {
       const answer = await once(url, init)
+      if (answer === 'oversize') {
+        // A body past the cap is not a transient fault: reading it again would cost the same.
+        options.logger.warn('the OpenID provider answered with too much data', { call: what })
+        throw new OidcFailure('unavailable', what)
+      }
       const failed = answer === 'network' || answer.status >= 500
       if (!failed) {
         return answer
@@ -197,7 +203,21 @@ export function createGoogleProvider(options: GoogleProviderOptions): OidcProvid
     if (keys && fresh && now - keys.at < JWKS_REFETCH_COOLDOWN_MS) {
       return keys.value
     }
-    return fetchKeys()
+    try {
+      return await fetchKeys()
+    } catch (error) {
+      // The provider is down but we hold the very key this token names: use it. A key the cache
+      // has never seen cannot be trusted without the provider, so that stays unavailable.
+      if (
+        keys?.value.some((key) => key.kid === kid) &&
+        error instanceof OidcFailure &&
+        error.reason === 'unavailable'
+      ) {
+        options.logger.warn('the OpenID signing keys could not be refreshed; using the cached key')
+        return keys.value
+      }
+      throw error
+    }
   }
 
   return {
@@ -294,6 +314,14 @@ export function createGoogleProvider(options: GoogleProviderOptions): OidcProvid
         throw new OidcFailure('invalid_token', 'claims')
       }
       const c = claims.data
+      // OpenID Connect Core 3.1.3.7: with several audiences, the authorized party must be us.
+      if (
+        Array.isArray(payload.aud) &&
+        payload.aud.length > 1 &&
+        payload.azp !== options.clientId
+      ) {
+        throw new OidcFailure('invalid_token', 'azp')
+      }
       if (c.iat > now.getTime() / 1000 + GOOGLE_CLOCK_SKEW_SECONDS) {
         throw new OidcFailure('invalid_token', 'iat')
       }
@@ -310,6 +338,32 @@ export function createGoogleProvider(options: GoogleProviderOptions): OidcProvid
       } satisfies GoogleProfile
     },
   }
+}
+
+/**
+ * The body as text, read through a stream and cancelled as soon as it passes the cap, so a huge
+ * or endless body is never held; `undefined` when it was too large.
+ */
+async function readCapped(response: Response): Promise<string | undefined> {
+  if (response.body === null) {
+    return ''
+  }
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) {
+      break
+    }
+    size += value.byteLength
+    if (size > MAX_RESPONSE_BYTES) {
+      await reader.cancel().catch(() => {})
+      return undefined
+    }
+    chunks.push(value)
+  }
+  return Buffer.concat(chunks).toString('utf8')
 }
 
 /** Parses JSON text against a schema; `undefined` when it is not JSON or does not match. */

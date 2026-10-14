@@ -35,6 +35,8 @@ export type TokenFlaw =
   | 'no_subject'
   | 'no_email'
   | 'no_nonce'
+  | 'extra_audience'
+  | 'extra_audience_with_azp'
 
 /** What the browser does at the fake Google: approves as an account, with an optional flaw. */
 export type FakeVisit = { account: FakeAccount; flaw?: TokenFlaw } | { error: string }
@@ -116,6 +118,9 @@ export function createMemoryOidcProvider(clock: Clock): MemoryOidcProvider {
     if (flaw === 'no_email') {
       claims.email = undefined
     }
+    if (flaw === 'extra_audience_with_azp') {
+      claims.azp = FAKE_CLIENT_ID
+    }
     if (flaw === 'no_nonce') {
       claims.nonce = undefined
     }
@@ -124,7 +129,13 @@ export function createMemoryOidcProvider(clock: Clock): MemoryOidcProvider {
     let jwt = new SignJWT(claims)
       .setProtectedHeader({ alg: flaw === 'wrong_algorithm' ? 'RS512' : 'RS256', kid: key.kid })
       .setIssuer(flaw === 'bad_issuer' ? 'https://evil.test' : FAKE_ISSUER)
-      .setAudience(flaw === 'bad_audience' ? 'another-client' : FAKE_CLIENT_ID)
+      .setAudience(
+        flaw === 'bad_audience'
+          ? 'another-client'
+          : flaw === 'extra_audience' || flaw === 'extra_audience_with_azp'
+            ? [FAKE_CLIENT_ID, 'another-client']
+            : FAKE_CLIENT_ID
+      )
       .setIssuedAt(flaw === 'expired' ? now - 7200 : flaw === 'issued_in_future' ? now + 3600 : now)
       .setExpirationTime(
         flaw === 'expired' ? now - 3600 : flaw === 'issued_in_future' ? now + 7200 : now + 3600
