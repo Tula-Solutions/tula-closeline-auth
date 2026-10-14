@@ -12,6 +12,7 @@ import {
   masterKey,
   publicUrl,
   sessionCookieInsecure,
+  trustedProxyHops,
 } from './env'
 
 test('configuration falls back to defaults for everything but the environment', () => {
@@ -704,5 +705,19 @@ describe('the Sign in with Google settings', () => {
     expect(() => loadEnv({ ...local, ...google, GOOGLE_ISSUER_URL: 'ftp://x' })).toThrow(
       'GOOGLE_ISSUER_URL'
     )
+  })
+})
+
+describe('the trusted proxy hops', () => {
+  test('default to one, and are an integer from 1 to 10', () => {
+    expect(trustedProxyHops(loadEnv({ ENVIRONMENT: 'local', REGION: 'us' }))).toBe(1)
+    expect(
+      trustedProxyHops(loadEnv({ ENVIRONMENT: 'local', REGION: 'us', TRUSTED_PROXY_HOPS: '2' }))
+    ).toBe(2)
+    for (const value of ['0', '11', '1.5', 'two', '']) {
+      expect(() =>
+        loadEnv({ ENVIRONMENT: 'local', REGION: 'us', TRUSTED_PROXY_HOPS: value })
+      ).toThrow('TRUSTED_PROXY_HOPS')
+    }
   })
 })

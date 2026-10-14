@@ -36,10 +36,11 @@ routes' descriptions (`GOOGLE_ROUTES`), the cookie base name and the `oidc.*` co
   the attempt in ONE transaction. Never consume the attempt before core has answered. Core answers
   the same for an unknown Invitation and for another address, so any refused Invitation is
   reported as `oidc.invitation_mismatch`.
+- **Verification extras**: several audiences need `azp` equal to the client id; a response body is read through a stream and cut at 1 MiB (no retry); a stale cached key still verifies a token naming its `kid` when the refetch fails.
 - **Provider calls**: 5 s each, at most 2 jittered retries on a network error or a 5xx; the code
   exchange is retried only when no response came back. Keys are cached, refetched on an unknown
   `kid` at most once per 30 s. RS256 only, 60 s of skew.
-- **Rate limits** are per source (the last `X-Forwarded-For` hop) on all four routes, plus a cap
+- **Rate limits** are per source (the `X-Forwarded-For` hop `TRUSTED_PROXY_HOPS` from the right; a shorter header shares one `unknown` bucket) on all four routes, plus a cap
   per attempt on `complete`. The edge limit in AGENTS.md still applies.
 - **Tests**: `createTestDeps().oidc` is the real HTTP adapter over an in-process fake Google
   (`adapters/memory/oidc-provider.ts`) with controls for every failure.

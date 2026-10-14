@@ -291,6 +291,13 @@ const schema = z
      */
     DEVICE_COOKIE_KEY: counterSecret('DEVICE_COOKIE_KEY'),
     /**
+     * How many proxies in front of this service append to `X-Forwarded-For` (the edge plus the
+     * portal's proxy, for instance): an integer from 1 to 10, default 1. The per-source rate limits
+     * take the client from that many hops from the right of the header, so a value the client
+     * wrote at the front is never used. A header with fewer hops (or none) shares one bucket.
+     */
+    TRUSTED_PROXY_HOPS: z.coerce.number().int().min(1).max(10).optional(),
+    /**
      * Sign in with Google (ADR 0019): the OAuth client id, client secret and redirect URI, set all
      * together or not at all (a half-set configuration fails at boot). Unset, the feature is off:
      * the routes answer `oidc.disabled`. The secret is never logged.
@@ -500,4 +507,9 @@ export function googleConfig(
     redirectUri: env.GOOGLE_REDIRECT_URI,
     issuer: (env.GOOGLE_ISSUER_URL ?? GOOGLE_DEFAULT_ISSUER).replace(/\/+$/, ''),
   }
+}
+
+/** The number of proxies that append to `X-Forwarded-For`: the configured one, or 1. */
+export function trustedProxyHops(env: Env): number {
+  return env.TRUSTED_PROXY_HOPS ?? 1
 }

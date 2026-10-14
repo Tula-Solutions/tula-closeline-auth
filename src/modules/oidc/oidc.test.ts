@@ -251,6 +251,57 @@ describe('start', () => {
     expect(other.status).toBe(200)
   })
 
+  describe('the source of a request', () => {
+    const startFrom = (app: Awaited<ReturnType<typeof setup>>['app'], forwarded?: string) =>
+      call(app, 'POST', '/v1/client/google/start', {
+        headers: {
+          origin: ORIGIN,
+          ...(forwarded === undefined ? {} : { 'x-forwarded-for': forwarded }),
+        },
+        body: { intent: 'sign_in' },
+      })
+    const exhaust = async (
+      app: Awaited<ReturnType<typeof setup>>['app'],
+      forwarded: (n: number) => string | undefined
+    ) => {
+      let last: Reply | undefined
+      for (let n = 0; n < 21; n += 1) {
+        last = await startFrom(app, forwarded(n))
+      }
+      return last
+    }
+
+    test('with TRUSTED_PROXY_HOPS=2 the client is the second hop from the right, whatever leads', async () => {
+      const { app } = await setup({ env: { TRUSTED_PROXY_HOPS: '2' } })
+
+      // One client, a different forged leading hop on every call: still one bucket.
+      const blocked = await exhaust(app, (n) => `10.0.0.${n}, 203.0.113.1, 198.51.100.1`)
+
+      expect(blocked?.status).toBe(429)
+      expect((await startFrom(app, 'forged, 203.0.113.1, 198.51.100.1')).status).toBe(429)
+      // Another client behind the same proxies has a bucket of its own.
+      expect((await startFrom(app, '203.0.113.2, 198.51.100.1')).status).toBe(200)
+    })
+
+    test('a header with fewer hops than trusted, or none, shares one bucket', async () => {
+      const { app } = await setup({ env: { TRUSTED_PROXY_HOPS: '2' } })
+
+      const blocked = await exhaust(app, (n) => (n % 2 === 0 ? undefined : `10.0.0.${n}`))
+
+      expect(blocked?.status).toBe(429)
+      expect((await startFrom(app)).status).toBe(429)
+      expect((await startFrom(app, '1.2.3.4')).status).toBe(429)
+      expect((await startFrom(app, '203.0.113.2, 198.51.100.1')).status).toBe(200)
+    })
+
+    test('by default one proxy is trusted: the last hop', async () => {
+      const { app } = await setup()
+      const blocked = await exhaust(app, () => 'forged, 203.0.113.7')
+      expect(blocked?.status).toBe(429)
+      expect((await startFrom(app, 'forged, 203.0.113.8')).status).toBe(200)
+    })
+  })
+
   test('answers oidc.provider_unavailable with Retry-After when Google cannot be reached', async () => {
     const { app, deps } = await setup()
     deps.oidc.failNext('discovery', 503, 3)
@@ -781,6 +832,32 @@ describe('complete', () => {
     expect(reply.body).toMatchObject({ error: { code: 'oidc.state_invalid' } })
     expect(deps.membership.abandons).toEqual([])
     expect(deps.reported).toEqual([])
+  })
+
+  test('an attempt that expires while core answers is reported as an Organization with no owner, once', async () => {
+    const { pending, complete, deps, userByEmail } = await setup()
+    const organizationId = `org_${'a'.repeat(32)}`
+    deps.membership.invite('inv-9', { email: 'maya@northline.app', organizationId, role: 'rep' })
+    const p = await pending()
+    const accept = deps.membership.acceptInvitation.bind(deps.membership)
+    spyOn(deps.membership, 'acceptInvitation').mockImplementationOnce(async (input) => {
+      const answer = await accept(input)
+      deps.clock.advance('11m')
+      return answer
+    })
+    const body = { attemptId: p.attemptId, invitationToken: 'inv-9' }
+
+    const reply = await complete(body, p.begun.cookie)
+
+    expect(reply.status).toBe(400)
+    expect(reply.body).toMatchObject({ error: { code: 'oidc.state_invalid' } })
+    expect(refreshLine(reply)).toBeUndefined()
+    expect(await userByEmail('maya@northline.app')).toBeNull()
+    expect(deps.reported).toHaveLength(1)
+    expect(String(deps.reported[0]?.error)).toContain('has no owner')
+    // A retry is refused as expired and reports nothing more.
+    await complete(body, p.begun.cookie)
+    expect(deps.reported).toHaveLength(1)
   })
 
   test('an expired attempt is oidc.state_invalid', async () => {

@@ -12,6 +12,7 @@ import {
 } from 'tula-closeline-contract'
 import { AppError } from 'tula-closeline-kit'
 import type { Container } from '~/container'
+import { trustedProxyHops } from '~/env'
 import { DEFINITIONS, type ServiceErrorCode } from '~/errors'
 import { clientContext, noStore } from '~/http/client'
 import { BODY_ERRORS, errorResponses } from '~/http/responses'
@@ -158,11 +159,17 @@ const options = createRoute({
   },
 })
 
-/** A request's source for the rate limits: the last `X-Forwarded-For` hop (the balancer's own). */
-function sourceOf(c: Context<AppEnv>): string {
-  const hops = (c.req.header('x-forwarded-for') ?? '').split(',')
-  const last = hops.at(-1)?.trim() ?? ''
-  return last === '' ? 'unknown' : last.slice(0, 64)
+/**
+ * A request's source for the rate limits: the hop `TRUSTED_PROXY_HOPS` from the right of
+ * `X-Forwarded-For`, which the proxies in front of this service wrote. Anything further left was
+ * written by the client and is ignored. A header with fewer hops, or none, is the one shared
+ * `unknown` bucket: nothing the client supplied is trusted.
+ */
+function sourceOf(container: Container, c: Context<AppEnv>): string {
+  const hops = (c.req.header('x-forwarded-for') ?? '').split(',').map((hop) => hop.trim())
+  const depth = trustedProxyHops(container.env)
+  const client = hops.length >= depth ? hops[hops.length - depth] : undefined
+  return client === undefined || client === '' ? 'unknown' : client.slice(0, 64)
 }
 
 /** The first value of a query parameter as text, cut to a bounded length. */
@@ -186,7 +193,7 @@ export function createOidcRouter(container: Container): OpenAPIHono<AppEnv> {
   router.openapi(start, async (c) => {
     noStore(c)
     origin(c)
-    await Oidc.limitSource(container, 'start', sourceOf(c))
+    await Oidc.limitSource(container, 'start', sourceOf(container, c))
     const started = await Oidc.start(container, tenant(), c.req.valid('json'))
     c.header('Set-Cookie', setOidcCookie(container.env, started.cookieSecret))
     return c.json({ authorizationUrl: started.authorizationUrl }, 200)
@@ -197,7 +204,7 @@ export function createOidcRouter(container: Container): OpenAPIHono<AppEnv> {
     const context = clientContext(container, c)
     let spent = false
     try {
-      await Oidc.limitSource(container, 'callback', sourceOf(c))
+      await Oidc.limitSource(container, 'callback', sourceOf(container, c))
       const result = await Oidc.callback(
         container,
         tenant(),
@@ -240,7 +247,7 @@ export function createOidcRouter(container: Container): OpenAPIHono<AppEnv> {
   router.openapi(complete, async (c) => {
     noStore(c)
     origin(c)
-    await Oidc.limitSource(container, 'complete', sourceOf(c))
+    await Oidc.limitSource(container, 'complete', sourceOf(container, c))
     const done = await Oidc.complete(
       container,
       tenant(),
@@ -254,7 +261,7 @@ export function createOidcRouter(container: Container): OpenAPIHono<AppEnv> {
   })
 
   router.openapi(options, async (c) => {
-    await Oidc.limitSource(container, 'options', sourceOf(c))
+    await Oidc.limitSource(container, 'options', sourceOf(container, c))
     return c.json({ providers: { google: container.oidc.enabled } }, 200)
   })
 

@@ -618,7 +618,13 @@ export async function complete(
       emailIdentityId: deps.ids.next(),
       googleIdentityId: deps.ids.next(),
       subject: profile.sub,
-      consume: { id: attempt.id, from: 'oidc_pending', at: now, state: { client: 'web' } },
+      // A fresh time: core may have taken seconds, and an attempt that ran out meanwhile is spent.
+      consume: {
+        id: attempt.id,
+        from: 'oidc_pending',
+        at: deps.clock.now(),
+        state: { client: 'web' },
+      },
       ...(abandonCaseId !== undefined ? { settlesAbandonCase: abandonCaseId } : {}),
     })
   } catch (error) {
@@ -656,7 +662,12 @@ export async function complete(
     throw fail(AUTH_ERRORS['oidc.state_invalid'])
   }
   if (result === 'consumed') {
-    // A racing call (or expiry) took the attempt between the check and the write.
+    // A racing call (which then owns this Organization) or the attempt's expiry took the attempt
+    // between the check and the write. Only when no account has this user id is the Organization
+    // unowned: report it (ids only, once per attempt per hour) for the sweep or an operator.
+    if ((await deps.users.findById(tenant.environmentId, userId)) === null) {
+      await orphan('the attempt ended before the Google account could be written', 400)
+    }
     throw fail(AUTH_ERRORS['oidc.state_invalid'])
   }
   const session = await Sessions.create(deps, tenant, {

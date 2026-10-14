@@ -189,4 +189,38 @@ describe('Sign in with Google against a real Postgres', () => {
     expect(seen.rows).toEqual([])
     expect(await deps.flowAttempts.findById(other, attemptId)).toBeNull()
   })
+
+  test('an attempt that expires while core answers is reported once as an Organization with no owner, and no session is issued', async () => {
+    const app = createApp(deps)
+    const started = await begin(app)
+    const attemptId = attemptOf(await back(app, started, { sub: 'sub-late', email: 'late@x.app' }))
+    deps.membership.invite('inv-late', {
+      email: 'late@x.app',
+      organizationId: `org_${'b'.repeat(32)}`,
+      role: 'rep',
+    })
+    const accept = deps.membership.acceptInvitation.bind(deps.membership)
+    spyOn(deps.membership, 'acceptInvitation').mockImplementationOnce(async (input) => {
+      const answer = await accept(input)
+      deps.clock.advance('11m')
+      await deps.settle()
+      return answer
+    })
+    const reportedBefore = deps.reported.length
+
+    const reply = await call(app, 'POST', '/v1/client/google/complete', {
+      headers: { origin: ORIGIN, cookie: started.cookie },
+      body: { attemptId, invitationToken: 'inv-late' },
+    })
+
+    expect(reply.status).toBe(400)
+    expect(reply.body).toMatchObject({ error: { code: 'oidc.state_invalid' } })
+    expect(reply.headers.getSetCookie()).toEqual([])
+    expect(
+      await rows(sql`select id from auth.users where email_normalized = 'late@x.app'`)
+    ).toEqual([])
+    const reports = deps.reported.slice(reportedBefore)
+    expect(reports).toHaveLength(1)
+    expect(String(reports[0]?.error)).toContain('has no owner')
+  })
 })
