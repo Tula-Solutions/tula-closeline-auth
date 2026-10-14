@@ -1,4 +1,4 @@
-import type { FlowStatus } from '~/modules/flow/schema'
+import type { StoredFlowStatus } from '~/modules/flow/schema'
 import type {
   FlowAttemptChange,
   FlowAttemptRecord,
@@ -32,7 +32,7 @@ export class MemoryFlowAttemptStore implements FlowAttemptStore {
   async transition(
     environmentId: string,
     id: string,
-    from: FlowStatus,
+    from: StoredFlowStatus,
     change: FlowAttemptChange,
     at: Date,
     guard?: StateGuard

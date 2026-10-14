@@ -1,11 +1,15 @@
-import { and, eq } from 'drizzle-orm'
+import { and, eq, gt, isNull } from 'drizzle-orm'
 import { ABANDON_SETTLE, type Database, withEnvironment } from 'tula-closeline-db'
-import { credentials, identities, users } from 'tula-closeline-db/schema'
+import { auditLogs, credentials, flowAttempts, identities, users } from 'tula-closeline-db/schema'
 import { hasSqlState, isUniqueViolation } from '~/adapters/postgres/errors'
 import { statement } from '~/adapters/postgres/statement'
 import {
   AbandonCaseClaimed,
+  type CreateGoogleUserResult,
+  type NewGoogleLink,
+  type NewGoogleUser,
   type NewUser,
+  type UserForLinking,
   type UserRecord,
   type UserRepository,
   type UserWithPassword,
@@ -24,6 +28,9 @@ const columns = {
   lastSignInAt: users.lastSignInAt,
   createdAt: users.createdAt,
 }
+
+/** Thrown inside the Google user's transaction to roll it back when the attempt was already used. */
+class AttemptConsumed extends Error {}
 
 /** Users, identities and credentials in `auth`, inside the environment's RLS scope. */
 export class PostgresUserRepository implements UserRepository {
@@ -131,6 +138,179 @@ export class PostgresUserRepository implements UserRepository {
       }
       if (error instanceof AbandonCaseClaimed || hasSqlState(error, '40001')) {
         // A serialization failure here can only be the settle racing the claim: a lost race too.
+        throw error instanceof AbandonCaseClaimed ? error : new AbandonCaseClaimed()
+      }
+      throw error
+    }
+  }
+
+  /** @inheritdoc */
+  async findByGoogleSubject(environmentId: string, subject: string): Promise<UserRecord | null> {
+    const [row] = await withEnvironment(this.db, environmentId, (tx) =>
+      tx
+        .select(columns)
+        .from(identities)
+        .innerJoin(
+          users,
+          and(eq(users.id, identities.userId), eq(users.environmentId, identities.environmentId))
+        )
+        .where(
+          and(
+            eq(identities.environmentId, environmentId),
+            eq(identities.provider, 'google'),
+            eq(identities.providerSubject, subject)
+          )
+        )
+        .limit(1)
+    )
+    return row ?? null
+  }
+
+  /** @inheritdoc */
+  async findForGoogleLinking(
+    environmentId: string,
+    emailNormalized: string
+  ): Promise<UserForLinking | null> {
+    return withEnvironment(this.db, environmentId, async (tx) => {
+      const [user] = await tx
+        .select(columns)
+        .from(users)
+        .where(
+          and(eq(users.emailNormalized, emailNormalized), eq(users.environmentId, environmentId))
+        )
+        .limit(1)
+      if (!user) {
+        return null
+      }
+      const [password] = await tx
+        .select({ id: credentials.id })
+        .from(credentials)
+        .where(
+          and(
+            eq(credentials.userId, user.id),
+            eq(credentials.environmentId, environmentId),
+            eq(credentials.type, 'password')
+          )
+        )
+        .limit(1)
+      const [google] = await tx
+        .select({ id: identities.id })
+        .from(identities)
+        .where(
+          and(
+            eq(identities.userId, user.id),
+            eq(identities.environmentId, environmentId),
+            eq(identities.provider, 'google')
+          )
+        )
+        .limit(1)
+      return { user, hasPassword: password !== undefined, hasGoogle: google !== undefined }
+    })
+  }
+
+  /** @inheritdoc */
+  async linkGoogle(link: NewGoogleLink): Promise<boolean> {
+    const scope = { projectId: link.projectId, environmentId: link.environmentId }
+    try {
+      await withEnvironment(this.db, link.environmentId, async (tx) => {
+        // The unique keys (user and provider; provider and subject) are the arbiter of a race.
+        await tx.insert(identities).values({
+          id: link.identityId,
+          ...scope,
+          userId: link.userId,
+          provider: 'google',
+          providerSubject: link.subject,
+          createdAt: link.at,
+          updatedAt: link.at,
+        })
+        await tx.insert(auditLogs).values({
+          id: link.auditId,
+          ...scope,
+          actorType: 'user',
+          actorId: link.userId,
+          action: 'google_linked',
+          targetType: 'user',
+          targetId: link.userId,
+          metadata: { provider: 'google' },
+          occurredAt: link.at,
+        })
+      })
+      return true
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        return false
+      }
+      throw error
+    }
+  }
+
+  /** @inheritdoc */
+  async createGoogleUser(user: NewGoogleUser): Promise<CreateGoogleUserResult> {
+    const { emailIdentityId, googleIdentityId, subject, consume, settlesAbandonCase, ...record } =
+      user
+    const scope = { projectId: user.projectId, environmentId: user.environmentId }
+    const stamps = { createdAt: user.createdAt, updatedAt: user.createdAt }
+    try {
+      await withEnvironment(this.db, user.environmentId, async (tx) => {
+        await tx.insert(users).values({ ...record, updatedAt: user.createdAt })
+        await tx.insert(identities).values({
+          id: emailIdentityId,
+          ...scope,
+          userId: user.id,
+          provider: 'email',
+          providerSubject: user.emailNormalized ?? '',
+          ...stamps,
+        })
+        await tx.insert(identities).values({
+          id: googleIdentityId,
+          ...scope,
+          userId: user.id,
+          provider: 'google',
+          providerSubject: subject,
+          ...stamps,
+        })
+        // The attempt is consumed in this transaction, after the unique keys have had their say:
+        // of two racing calls exactly one finds the attempt still on its step.
+        const consumed = await tx
+          .update(flowAttempts)
+          .set({
+            status: 'complete',
+            userId: user.id,
+            state: consume.state,
+            completedAt: consume.at,
+            updatedAt: consume.at,
+          })
+          .where(
+            and(
+              eq(flowAttempts.id, consume.id),
+              eq(flowAttempts.environmentId, user.environmentId),
+              eq(flowAttempts.status, consume.from),
+              isNull(flowAttempts.completedAt),
+              gt(flowAttempts.expiresAt, consume.at)
+            )
+          )
+          .returning({ id: flowAttempts.id })
+        if (consumed.length === 0) {
+          throw new AttemptConsumed()
+        }
+        if (settlesAbandonCase !== undefined) {
+          const settled = await tx.execute(
+            statement(ABANDON_SETTLE, [settlesAbandonCase, user.environmentId])
+          )
+          if (settled.rows.length === 0) {
+            throw new AbandonCaseClaimed()
+          }
+        }
+      })
+      return 'created'
+    } catch (error) {
+      if (error instanceof AttemptConsumed) {
+        return 'consumed'
+      }
+      if (isUniqueViolation(error)) {
+        return 'conflict'
+      }
+      if (error instanceof AbandonCaseClaimed || hasSqlState(error, '40001')) {
         throw error instanceof AbandonCaseClaimed ? error : new AbandonCaseClaimed()
       }
       throw error

@@ -1,4 +1,4 @@
-import type { FlowKind, FlowStatus } from '~/modules/flow/schema'
+import type { FlowKind, StoredFlowStatus } from '~/modules/flow/schema'
 
 /** An in-progress sign-in or sign-up and the step it is waiting on. */
 export interface FlowAttemptRecord {
@@ -7,7 +7,7 @@ export interface FlowAttemptRecord {
   environmentId: string
   kind: FlowKind
   /** The step the attempt is waiting on. */
-  status: FlowStatus
+  status: StoredFlowStatus
   /** Set once the attempt is tied to a user. Never exposed before the flow completes. */
   userId: string | null
   /** Normalized identifier (email) the attempt started with. */
@@ -30,7 +30,7 @@ export type NewFlowAttempt = Omit<FlowAttemptRecord, 'completedAt'>
 
 /** What a transition changes. Omitted fields keep their value. */
 export interface FlowAttemptChange {
-  status: FlowStatus
+  status: StoredFlowStatus
   userId?: string
   /**
    * Gives the attempt an identifier it did not start with: a sign-in by passkey starts with
@@ -86,7 +86,7 @@ export interface FlowAttemptStore {
   transition(
     environmentId: string,
     id: string,
-    from: FlowStatus,
+    from: StoredFlowStatus,
     change: FlowAttemptChange,
     at: Date,
     guard?: StateGuard

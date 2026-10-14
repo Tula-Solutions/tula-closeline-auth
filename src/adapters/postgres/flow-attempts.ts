@@ -1,7 +1,7 @@
 import { and, eq, gt, inArray, isNull, lte, sql } from 'drizzle-orm'
 import { type Database, withEnvironment } from 'tula-closeline-db'
 import { flowAttempts } from 'tula-closeline-db/schema'
-import type { FlowKind, FlowStatus } from '~/modules/flow/schema'
+import type { FlowKind, StoredFlowStatus } from '~/modules/flow/schema'
 import type {
   FlowAttemptChange,
   FlowAttemptRecord,
@@ -52,14 +52,16 @@ export class PostgresFlowAttemptStore implements FlowAttemptStore {
         .limit(1)
     )
     // `status` is free text in the schema; only this adapter and the flow service write it.
-    return row ? { ...row, kind: row.kind as FlowKind, status: row.status as FlowStatus } : null
+    return row
+      ? { ...row, kind: row.kind as FlowKind, status: row.status as StoredFlowStatus }
+      : null
   }
 
   /** @inheritdoc */
   async transition(
     environmentId: string,
     id: string,
-    from: FlowStatus,
+    from: StoredFlowStatus,
     change: FlowAttemptChange,
     at: Date,
     guard?: StateGuard
