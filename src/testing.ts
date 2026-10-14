@@ -68,7 +68,7 @@ export function createTestDeps(
     CORE_INTERNAL_TOKEN: 'test-core-token-0123456789abcdef-test',
     // A deployed environment must name an allowed origin; `local` leaves it unset.
     ...(overrides.env?.ENVIRONMENT !== undefined && overrides.env.ENVIRONMENT !== 'local'
-      ? { SESSION_ALLOWED_ORIGINS: 'https://app.example.com' }
+      ? { SESSION_ALLOWED_ORIGINS: 'https://app.example.com', TRUSTED_PROXY_HOPS: '1' }
       : {}),
     ...overrides.env,
   })

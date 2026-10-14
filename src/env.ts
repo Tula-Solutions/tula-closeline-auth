@@ -292,7 +292,7 @@ const schema = z
     DEVICE_COOKIE_KEY: counterSecret('DEVICE_COOKIE_KEY'),
     /**
      * How many proxies in front of this service append to `X-Forwarded-For` (the edge plus the
-     * portal's proxy, for instance): an integer from 1 to 10, default 1. The per-source rate limits
+     * portal's proxy, for instance): an integer from 1 to 10, default 1 in `local`; required elsewhere (boot fails without it). The per-source rate limits
      * take the client from that many hops from the right of the header, so a value the client
      * wrote at the front is never used. A header with fewer hops (or none) shares one bucket.
      */
@@ -376,6 +376,7 @@ const schema = z
       'CORE_BASE_URL',
       'CORE_INTERNAL_TOKEN',
       'SESSION_ALLOWED_ORIGINS',
+      'TRUSTED_PROXY_HOPS',
       'COUNTER_HASH_KEY',
       'DEVICE_COOKIE_KEY',
     ] as const) {

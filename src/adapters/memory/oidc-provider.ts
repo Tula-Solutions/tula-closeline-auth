@@ -37,6 +37,7 @@ export type TokenFlaw =
   | 'no_nonce'
   | 'extra_audience'
   | 'extra_audience_with_azp'
+  | 'foreign_azp'
 
 /** What the browser does at the fake Google: approves as an account, with an optional flaw. */
 export type FakeVisit = { account: FakeAccount; flaw?: TokenFlaw } | { error: string }
@@ -120,6 +121,9 @@ export function createMemoryOidcProvider(clock: Clock): MemoryOidcProvider {
     }
     if (flaw === 'extra_audience_with_azp') {
       claims.azp = FAKE_CLIENT_ID
+    }
+    if (flaw === 'foreign_azp') {
+      claims.azp = 'another-client'
     }
     if (flaw === 'no_nonce') {
       claims.nonce = undefined

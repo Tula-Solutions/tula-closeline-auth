@@ -36,7 +36,7 @@ routes' descriptions (`GOOGLE_ROUTES`), the cookie base name and the `oidc.*` co
   the attempt in ONE transaction. Never consume the attempt before core has answered. Core answers
   the same for an unknown Invitation and for another address, so any refused Invitation is
   reported as `oidc.invitation_mismatch`.
-- **Verification extras**: several audiences need `azp` equal to the client id; a response body is read through a stream and cut at 1 MiB (no retry); a stale cached key still verifies a token naming its `kid` when the refetch fails.
+- **Verification extras**: several audiences need `azp` equal to the client id; a response body is read through a stream and cut at 1 MiB (no retry); a stale cached key (at most 24 h old) still verifies a token naming its `kid` when the refetch fails, and after a failed refresh nothing is refetched for 30 s; an `azp` that is not the client id is refused whatever `aud` is.
 - **Provider calls**: 5 s each, at most 2 jittered retries on a network error or a 5xx; the code
   exchange is retried only when no response came back. Keys are cached, refetched on an unknown
   `kid` at most once per 30 s. RS256 only, 60 s of skew.

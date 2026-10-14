@@ -117,6 +117,7 @@ const DEPLOYED = {
   SESSION_ALLOWED_ORIGINS: 'https://app.example.com',
   COUNTER_HASH_KEY: 'h'.repeat(40),
   DEVICE_COOKIE_KEY: 'd'.repeat(40),
+  TRUSTED_PROXY_HOPS: '1',
 }
 
 test('a deploy outside local boots with everything set', () => {
@@ -342,6 +343,7 @@ describe('the browser session settings', () => {
     SESSION_ALLOWED_ORIGINS: 'https://app.example.com',
     COUNTER_HASH_KEY: 'h'.repeat(40),
     DEVICE_COOKIE_KEY: 'd'.repeat(40),
+    TRUSTED_PROXY_HOPS: '1',
   }
 
   test('both are unset by default: secure cookie, and no origin is allowed', () => {
@@ -493,6 +495,7 @@ describe('the counter hash key and the known-device cookie key', () => {
     ...DEPLOYED,
     COUNTER_HASH_KEY: 'h'.repeat(40),
     DEVICE_COOKIE_KEY: 'd'.repeat(40),
+    TRUSTED_PROXY_HOPS: '1',
   }
 
   test.each(['dev', 'staging', 'prod'])(
@@ -575,6 +578,7 @@ describe('the published development keys', () => {
     ...DEPLOYED,
     COUNTER_HASH_KEY: 'h'.repeat(40),
     DEVICE_COOKIE_KEY: 'd'.repeat(40),
+    TRUSTED_PROXY_HOPS: '1',
   }
 
   test.each([
@@ -622,6 +626,7 @@ describe('the Sign in with Google settings', () => {
     SESSION_ALLOWED_ORIGINS: 'https://app.example.com',
     COUNTER_HASH_KEY: 'h'.repeat(40),
     DEVICE_COOKIE_KEY: 'd'.repeat(40),
+    TRUSTED_PROXY_HOPS: '1',
   }
   const google = {
     GOOGLE_CLIENT_ID: 'client-id',
@@ -720,4 +725,31 @@ describe('the trusted proxy hops', () => {
       ).toThrow('TRUSTED_PROXY_HOPS')
     }
   })
+})
+
+describe('the trusted proxy hops outside local', () => {
+  const deployed = {
+    ENVIRONMENT: 'prod',
+    REGION: 'eu',
+    DATABASE_URL: 'postgres://closeline_auth:x@db.example.com/closeline',
+    AUTH_MASTER_KEY: 'ab'.repeat(32),
+    PUBLIC_URL: 'https://auth.example.com',
+    CORE_BASE_URL: 'https://core.example.com',
+    CORE_INTERNAL_TOKEN: 'c'.repeat(40),
+    SESSION_ALLOWED_ORIGINS: 'https://app.example.com',
+    COUNTER_HASH_KEY: 'h'.repeat(40),
+    DEVICE_COOKIE_KEY: 'd'.repeat(40),
+  }
+
+  test.each(['dev', 'staging', 'prod'])(
+    '%s fails at boot without TRUSTED_PROXY_HOPS',
+    (environment) => {
+      expect(() => loadEnv({ ...deployed, ENVIRONMENT: environment })).toThrow('TRUSTED_PROXY_HOPS')
+      expect(
+        trustedProxyHops(
+          loadEnv({ ...deployed, ENVIRONMENT: environment, TRUSTED_PROXY_HOPS: '2' })
+        )
+      ).toBe(2)
+    }
+  )
 })

@@ -39,7 +39,59 @@ describe('the audience', () => {
   })
 })
 
+describe('the authorized party', () => {
+  test('an azp that is not the client id is refused even with a single audience', async () => {
+    const provider = createMemoryOidcProvider(createFixedClock('2026-01-01T00:00:00Z'))
+    await expect(signIn(provider, 'foreign_azp')).rejects.toMatchObject({
+      reason: 'invalid_token',
+    })
+  })
+})
+
 describe('the signing keys', () => {
+  test('a cached key older than 24 hours is no longer used when the refetch fails', async () => {
+    const clock = createFixedClock('2026-01-01T00:00:00Z')
+    const provider = createMemoryOidcProvider(clock)
+    await signIn(provider)
+
+    clock.advance('25h')
+    provider.failNext('jwks', 503, 3)
+
+    await expect(signIn(provider)).rejects.toMatchObject({ reason: 'unavailable' })
+  })
+
+  test('after a failed refresh nothing is refetched for 30 seconds and the stale cache is used', async () => {
+    const clock = createFixedClock('2026-01-01T00:00:00Z')
+    const provider = createMemoryOidcProvider(clock)
+    await signIn(provider)
+    clock.advance('2h')
+    provider.failNext('jwks', 503, 3)
+    await signIn(provider)
+    const after = provider.requests.jwks
+
+    await signIn(provider)
+    await signIn(provider)
+    expect(provider.requests.jwks).toBe(after)
+
+    clock.advance('31s')
+    await signIn(provider)
+    expect(provider.requests.jwks).toBe(after + 1)
+  })
+
+  test('during the cooldown an unknown key id is refused without a refetch', async () => {
+    const clock = createFixedClock('2026-01-01T00:00:00Z')
+    const provider = createMemoryOidcProvider(clock)
+    await signIn(provider)
+    clock.advance('2h')
+    provider.failNext('jwks', 503, 3)
+    await signIn(provider)
+    await provider.rotateKey()
+    const after = provider.requests.jwks
+
+    await expect(signIn(provider)).rejects.toMatchObject({ reason: 'unavailable' })
+    expect(provider.requests.jwks).toBe(after)
+  })
+
   test('a stale cached key still verifies when the refetch fails', async () => {
     const clock = createFixedClock('2026-01-01T00:00:00Z')
     const provider = createMemoryOidcProvider(clock)

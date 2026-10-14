@@ -15,6 +15,8 @@ export const GOOGLE_CLOCK_SKEW_SECONDS = 60
 export const DISCOVERY_TTL_MS = 3_600_000
 /** How long the signing keys are kept; an unknown key id refetches sooner, at most this often. */
 export const JWKS_TTL_MS = 3_600_000
+/** The longest a cached signing key is used when the provider cannot be reached. */
+export const JWKS_MAX_STALE_MS = 86_400_000
 /** The least time between two refetches of the keys caused by an unknown key id. */
 export const JWKS_REFETCH_COOLDOWN_MS = 30_000
 /** The largest provider response read. */
@@ -191,30 +193,51 @@ export function createGoogleProvider(options: GoogleProviderOptions): OidcProvid
     return fetchingKeys
   }
 
-  /** The cached keys, fetched when absent or old; `refresh` is true for an unknown key id. */
+  /** When the last refresh of the keys failed; no refetch is tried for the cooldown after it. */
+  let failedAt: number | undefined
+
+  /**
+   * The keys that can verify a token naming `kid`. Fresh keys are used as they are. Otherwise they
+   * are refetched, but not within the cooldown of the last fetch or of the last failure, so
+   * forged key ids or an outage cannot multiply calls to the provider. When the provider cannot
+   * be reached and the cache holds the very key the token names, that key is used for at most
+   * {@link JWKS_MAX_STALE_MS}; a key the cache has never seen stays unavailable.
+   */
   async function keySet(kid: string): Promise<JWK[]> {
     const now = options.clock.now().getTime()
     const fresh = keys !== undefined && now - keys.at < JWKS_TTL_MS
     if (keys && fresh && keys.value.some((key) => key.kid === kid)) {
       return keys.value
     }
-    // Unknown kid (or stale keys): refetch, but not more often than the cooldown, so a flood of
-    // forged key ids cannot make this service hammer the provider.
     if (keys && fresh && now - keys.at < JWKS_REFETCH_COOLDOWN_MS) {
       return keys.value
     }
+    const usableStale = (): JWK[] | undefined =>
+      keys !== undefined &&
+      now - keys.at <= JWKS_MAX_STALE_MS &&
+      keys.value.some((key) => key.kid === kid)
+        ? keys.value
+        : undefined
+    if (failedAt !== undefined && now - failedAt < JWKS_REFETCH_COOLDOWN_MS) {
+      const stale = usableStale()
+      if (stale) {
+        return stale
+      }
+      throw new OidcFailure('unavailable', 'jwks')
+    }
     try {
-      return await fetchKeys()
+      const fetched = await fetchKeys()
+      failedAt = undefined
+      return fetched
     } catch (error) {
-      // The provider is down but we hold the very key this token names: use it. A key the cache
-      // has never seen cannot be trusted without the provider, so that stays unavailable.
-      if (
-        keys?.value.some((key) => key.kid === kid) &&
-        error instanceof OidcFailure &&
-        error.reason === 'unavailable'
-      ) {
+      if (!(error instanceof OidcFailure) || error.reason !== 'unavailable') {
+        throw error
+      }
+      failedAt = now
+      const stale = usableStale()
+      if (stale) {
         options.logger.warn('the OpenID signing keys could not be refreshed; using the cached key')
-        return keys.value
+        return stale
       }
       throw error
     }
@@ -314,11 +337,12 @@ export function createGoogleProvider(options: GoogleProviderOptions): OidcProvid
         throw new OidcFailure('invalid_token', 'claims')
       }
       const c = claims.data
-      // OpenID Connect Core 3.1.3.7: with several audiences, the authorized party must be us.
+      // OpenID Connect Core 3.1.3.7: an authorized party that is not us is refused whatever the
+      // shape of `aud`, and with several audiences it must be present and be us.
+      const severalAudiences = Array.isArray(payload.aud) && payload.aud.length > 1
       if (
-        Array.isArray(payload.aud) &&
-        payload.aud.length > 1 &&
-        payload.azp !== options.clientId
+        (payload.azp !== undefined && payload.azp !== options.clientId) ||
+        (severalAudiences && payload.azp !== options.clientId)
       ) {
         throw new OidcFailure('invalid_token', 'azp')
       }
