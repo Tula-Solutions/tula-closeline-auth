@@ -34,6 +34,16 @@ export function sha256Hex(value: string): string {
 }
 
 /**
+ * SHA-256 of a UTF-8 string, base64url-encoded without padding: the PKCE S256 transform.
+ *
+ * @param value - The string to hash.
+ * @returns 43 base64url characters.
+ */
+export function sha256Base64Url(value: string): string {
+  return new Bun.CryptoHasher('sha256').update(value).digest('base64url')
+}
+
+/**
  * Compare two secrets in constant time.
  *
  * A length mismatch returns `false` immediately. That reveals only the length, which is fixed for
