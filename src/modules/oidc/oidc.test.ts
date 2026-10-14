@@ -658,6 +658,14 @@ describe('callback: the state and the cookie', () => {
     expect(deps.oidc.tokenRequests).toHaveLength(0)
   })
 
+  test('the attempt cookie is cleared once the attempt is spent, even when the code is refused', async () => {
+    const { begin, callbackFor } = await setup()
+
+    const back = await callbackFor(await begin(), { account: MAYA, flaw: 'bad_audience' })
+
+    expect(back.headers.getSetCookie().some((line) => line.startsWith('tula_oidc=;'))).toBe(true)
+  })
+
   test('the attempt cookie opens nothing in the password or email flows', async () => {
     const { begin, app } = await setup()
     const begun = await begin('sign_in')
@@ -750,6 +758,29 @@ describe('complete', () => {
 
     expect(replies.map((r) => r.status).sort()).toEqual([200, 400])
     expect(deps.membership.organizations).toHaveLength(1)
+    // The loser lost a race for the same account: it must not abandon the winner's Organization.
+    expect(deps.membership.abandons).toEqual([])
+    expect(deps.reported).toEqual([])
+  })
+
+  test('a lost race for the same account never abandons the winner’s Organization', async () => {
+    const { pending, complete, deps } = await setup()
+    const p = await pending()
+    const write = deps.users.createGoogleUser.bind(deps.users)
+    // The winner commits between the loser's checks and its write: the loser's write conflicts.
+    spyOn(deps.users, 'createGoogleUser').mockImplementationOnce(async (user) => {
+      await write(user)
+      return write(user)
+    })
+
+    const reply = await complete(
+      { attemptId: p.attemptId, organizationName: 'Northline' },
+      p.begun.cookie
+    )
+
+    expect(reply.body).toMatchObject({ error: { code: 'oidc.state_invalid' } })
+    expect(deps.membership.abandons).toEqual([])
+    expect(deps.reported).toEqual([])
   })
 
   test('an expired attempt is oidc.state_invalid', async () => {
@@ -826,13 +857,29 @@ describe('complete', () => {
   })
 
   test('is capped per attempt', async () => {
-    const { pending, complete } = await setup()
+    const { pending, complete, deps } = await setup()
     const p = await pending()
+    deps.membership.breakDown(true)
     let last: Reply | undefined
     for (let n = 0; n < 6; n += 1) {
-      last = await complete({ attemptId: p.attemptId, organizationName: 'Acme' }, 'tula_oidc=wrong')
+      last = await complete({ attemptId: p.attemptId, organizationName: 'Acme' }, p.begun.cookie)
     }
     expect(last?.status).toBe(429)
+  })
+
+  test('calls without the cookie do not spend the attempt’s budget', async () => {
+    const { pending, complete } = await setup()
+    const p = await pending()
+    for (let n = 0; n < 8; n += 1) {
+      await complete({ attemptId: p.attemptId, organizationName: 'Acme' }, 'tula_oidc=wrong')
+    }
+
+    const reply = await complete(
+      { attemptId: p.attemptId, organizationName: 'Acme' },
+      p.begun.cookie
+    )
+
+    expect(reply.status).toBe(200)
   })
 
   test('is limited per source', async () => {

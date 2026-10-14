@@ -280,7 +280,7 @@ export async function callback(
   tenant: Tenant,
   query: CallbackQuery,
   cookieSecret: string | undefined,
-  context: { report: (error: unknown, status: number) => void }
+  context: { report: (error: unknown, status: number) => void; onSpent?: () => void }
 ): Promise<CallbackResult> {
   if (!deps.oidc.enabled) {
     throw fail(AUTH_ERRORS['oidc.disabled'])
@@ -306,6 +306,8 @@ export async function callback(
   if (!consumed) {
     throw fail(AUTH_ERRORS['oidc.state_invalid'])
   }
+  // From here the attempt is dead whatever happens, so the router clears its cookie.
+  context.onSpent?.()
   if (query.error !== undefined) {
     throw fail(
       query.error === 'access_denied'
@@ -495,13 +497,18 @@ export async function complete(
   if (!UUID.test(input.attemptId)) {
     throw fail(AUTH_ERRORS['oidc.state_invalid'])
   }
-  await limit(deps, `oidc_complete:attempt:${input.attemptId}`, LIMITS.completePerAttempt)
   const attempt = await deps.flowAttempts.findById(tenant.environmentId, input.attemptId)
   const parsed = stateSchema.safeParse(attempt?.state)
   const cookieOk = timingSafeEqual(
     sha256Hex(cookieSecret ?? ''),
     attempt?.secretHash ?? 'x'.repeat(64)
   )
+  // Only a caller holding the cookie spends the attempt's budget: the attempt id travels in a URL,
+  // so counting every call would let anyone who sees it lock the person out. Guesses without the
+  // cookie are bounded by the per-source limit.
+  if (cookieOk && attempt && cookieSecret !== undefined) {
+    await limit(deps, `oidc_complete:attempt:${input.attemptId}`, LIMITS.completePerAttempt)
+  }
   const now = deps.clock.now()
   if (
     !attempt ||
@@ -629,8 +636,13 @@ export async function complete(
     throw error
   }
   if (result === 'conflict') {
-    // The address or the Google account went to someone else since the check: this attempt can
-    // never write its account, which is the one case a request may abandon the Organization.
+    // A racing call of this same attempt wrote the account (same user id): it is finishing the
+    // sign-up with this very Organization, which must not be abandoned.
+    if ((await deps.users.findById(tenant.environmentId, userId)) !== null) {
+      throw fail(AUTH_ERRORS['oidc.state_invalid'])
+    }
+    // Otherwise the address or the Google account went to someone else since the check: this
+    // attempt can never write its account, the one case a request may abandon the Organization.
     await settleOrphan(deps, { ...context, client: 'web' }, 409, {
       organizationId: membership.organizationId,
       userId: userUuid,

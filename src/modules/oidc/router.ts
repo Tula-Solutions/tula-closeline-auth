@@ -195,6 +195,7 @@ export function createOidcRouter(container: Container): OpenAPIHono<AppEnv> {
   router.openapi(callback, async (c) => {
     noStore(c)
     const context = clientContext(container, c)
+    let spent = false
     try {
       await Oidc.limitSource(container, 'callback', sourceOf(c))
       const result = await Oidc.callback(
@@ -202,7 +203,12 @@ export function createOidcRouter(container: Container): OpenAPIHono<AppEnv> {
         tenant(),
         { code: param(c, 'code'), state: param(c, 'state'), error: param(c, 'error') },
         cookieSecret(c),
-        context
+        {
+          report: context.report,
+          onSpent: () => {
+            spent = true
+          },
+        }
       )
       if (result.session) {
         c.header(
@@ -224,7 +230,7 @@ export function createOidcRouter(container: Container): OpenAPIHono<AppEnv> {
       if (!(error instanceof AppError)) {
         context.report(error, 500)
       }
-      if (code !== 'oidc.state_invalid' && code !== 'rate.limited') {
+      if (spent || (code !== 'oidc.state_invalid' && code !== 'rate.limited')) {
         c.header('Set-Cookie', clearOidcCookie(container.env))
       }
       return c.redirect(Oidc.errorLocation(code), 302)
