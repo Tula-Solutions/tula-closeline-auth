@@ -11,6 +11,24 @@ export const FLOW_STATUSES = ['needs_email_verification', 'needs_password', 'com
 /** The step an attempt is on. */
 export type FlowStatus = (typeof FLOW_STATUSES)[number]
 
+/**
+ * The steps of a Sign in with Google attempt (ADR 0019), stored in the same table. They are never
+ * shown to a client and never part of {@link FlowStatus}, so no password or email step accepts
+ * such an attempt: `oidc_started` is waiting for Google's redirect, `oidc_exchanging` is the
+ * callback that consumed the state, `oidc_pending` waits for the new user to name an Organization.
+ */
+export const OIDC_STATUSES = ['oidc_started', 'oidc_exchanging', 'oidc_pending'] as const
+/** The step of a Sign in with Google attempt. */
+export type OidcStatus = (typeof OIDC_STATUSES)[number]
+
+/** Every step an attempt can be stored on: a flow step, or a Sign in with Google step. */
+export type StoredFlowStatus = FlowStatus | OidcStatus
+
+/** Whether a stored step belongs to a Sign in with Google attempt. */
+export function isOidcStatus(status: StoredFlowStatus): status is OidcStatus {
+  return (OIDC_STATUSES as readonly string[]).includes(status)
+}
+
 /** The header that carries an attempt's secret; an attempt id alone does nothing. */
 export const ATTEMPT_SECRET_HEADER = 'x-tula-attempt'
 /** The header that says which kind of client is calling. */

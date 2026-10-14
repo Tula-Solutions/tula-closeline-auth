@@ -14,7 +14,10 @@
           },
           "kind": {
             "type": "string",
-            "enum": ["sign_in", "sign_up"]
+            "enum": [
+              "sign_in",
+              "sign_up"
+            ]
           },
           "expiresAt": {
             "type": "string",
@@ -31,20 +34,32 @@
             "$ref": "#/components/schemas/SessionTokens"
           }
         },
-        "required": ["id", "kind", "expiresAt", "step"]
+        "required": [
+          "id",
+          "kind",
+          "expiresAt",
+          "step"
+        ]
       },
       "FlowStep": {
         "type": "object",
         "properties": {
           "status": {
             "type": "string",
-            "enum": ["needs_email_verification", "needs_password", "complete"]
+            "enum": [
+              "needs_email_verification",
+              "needs_password",
+              "complete"
+            ]
           },
           "strategies": {
             "type": "array",
             "items": {
               "type": "string",
-              "enum": ["email_code", "password"]
+              "enum": [
+                "email_code",
+                "password"
+              ]
             }
           },
           "destination": {
@@ -57,7 +72,9 @@
             "type": "string"
           }
         },
-        "required": ["status"]
+        "required": [
+          "status"
+        ]
       },
       "SessionTokens": {
         "type": "object",
@@ -83,10 +100,18 @@
               },
               "role": {
                 "type": "string",
-                "enum": ["owner", "admin", "manager", "rep"]
+                "enum": [
+                  "owner",
+                  "admin",
+                  "manager",
+                  "rep"
+                ]
               }
             },
-            "required": ["id", "role"]
+            "required": [
+              "id",
+              "role"
+            ]
           }
         },
         "required": [
@@ -105,7 +130,10 @@
           },
           "kind": {
             "type": "string",
-            "enum": ["sign_in", "sign_up"]
+            "enum": [
+              "sign_in",
+              "sign_up"
+            ]
           },
           "expiresAt": {
             "type": "string",
@@ -122,7 +150,12 @@
             "$ref": "#/components/schemas/BrowserSessionTokens"
           }
         },
-        "required": ["id", "kind", "expiresAt", "step"]
+        "required": [
+          "id",
+          "kind",
+          "expiresAt",
+          "step"
+        ]
       },
       "BrowserSessionTokens": {
         "type": "object",
@@ -145,13 +178,26 @@
               },
               "role": {
                 "type": "string",
-                "enum": ["owner", "admin", "manager", "rep"]
+                "enum": [
+                  "owner",
+                  "admin",
+                  "manager",
+                  "rep"
+                ]
               }
             },
-            "required": ["id", "role"]
+            "required": [
+              "id",
+              "role"
+            ]
           }
         },
-        "required": ["sessionId", "accessToken", "accessTokenExpiresAt", "organization"],
+        "required": [
+          "sessionId",
+          "accessToken",
+          "accessTokenExpiresAt",
+          "organization"
+        ],
         "additionalProperties": false
       },
       "SignUpRequest": {
@@ -189,7 +235,10 @@
             "description": "Joins the Organization that issued this invitation."
           }
         },
-        "required": ["email", "password"],
+        "required": [
+          "email",
+          "password"
+        ],
         "additionalProperties": false
       },
       "VerifyEmailRequest": {
@@ -200,7 +249,9 @@
             "pattern": "^\\d{6}$"
           }
         },
-        "required": ["code"],
+        "required": [
+          "code"
+        ],
         "additionalProperties": false
       },
       "SignInRequest": {
@@ -212,7 +263,9 @@
             "maxLength": 320
           }
         },
-        "required": ["identifier"],
+        "required": [
+          "identifier"
+        ],
         "additionalProperties": false
       },
       "PasswordRequest": {
@@ -224,7 +277,9 @@
             "maxLength": 16384
           }
         },
-        "required": ["password"],
+        "required": [
+          "password"
+        ],
         "additionalProperties": false
       },
       "PasswordPolicy": {
@@ -237,7 +292,10 @@
             "type": "integer"
           }
         },
-        "required": ["minLength", "maxLength"]
+        "required": [
+          "minLength",
+          "maxLength"
+        ]
       },
       "RefreshRequest": {
         "type": "object",
@@ -248,7 +306,9 @@
             "maxLength": 512
           }
         },
-        "required": ["refreshToken"],
+        "required": [
+          "refreshToken"
+        ],
         "additionalProperties": false
       },
       "SessionSummary": {
@@ -259,7 +319,12 @@
           },
           "client": {
             "type": "string",
-            "enum": ["web", "ios", "android", "server"]
+            "enum": [
+              "web",
+              "ios",
+              "android",
+              "server"
+            ]
           },
           "createdAt": {
             "type": "string",
@@ -273,7 +338,13 @@
             "type": "boolean"
           }
         },
-        "required": ["id", "client", "createdAt", "lastActiveAt", "current"]
+        "required": [
+          "id",
+          "client",
+          "createdAt",
+          "lastActiveAt",
+          "current"
+        ]
       },
       "Me": {
         "type": "object",
@@ -282,20 +353,35 @@
             "type": "string"
           },
           "email": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "emailVerifiedAt": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date-time"
           },
           "firstName": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "lastName": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "bannedAt": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date-time"
           },
           "createdAt": {
@@ -310,10 +396,18 @@
               },
               "role": {
                 "type": "string",
-                "enum": ["owner", "admin", "manager", "rep"]
+                "enum": [
+                  "owner",
+                  "admin",
+                  "manager",
+                  "rep"
+                ]
               }
             },
-            "required": ["id", "role"]
+            "required": [
+              "id",
+              "role"
+            ]
           }
         },
         "required": [
@@ -333,7 +427,9 @@
   "paths": {
     "/healthz": {
       "get": {
-        "tags": ["health"],
+        "tags": [
+          "health"
+        ],
         "summary": "Liveness",
         "description": "Returns 200 while the process is up. It checks no dependency.",
         "responses": {
@@ -346,7 +442,9 @@
                   "properties": {
                     "status": {
                       "type": "string",
-                      "enum": ["ok"]
+                      "enum": [
+                        "ok"
+                      ]
                     },
                     "service": {
                       "type": "string"
@@ -358,7 +456,11 @@
                       }
                     }
                   },
-                  "required": ["status", "service", "libraries"]
+                  "required": [
+                    "status",
+                    "service",
+                    "libraries"
+                  ]
                 }
               }
             }
@@ -398,10 +500,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -441,10 +548,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -454,7 +566,9 @@
     },
     "/readyz": {
       "get": {
-        "tags": ["health"],
+        "tags": [
+          "health"
+        ],
         "summary": "Readiness",
         "description": "Runs every dependency check, each with a short timeout; 503 when any fails.",
         "responses": {
@@ -467,7 +581,10 @@
                   "properties": {
                     "status": {
                       "type": "string",
-                      "enum": ["ready", "unavailable"]
+                      "enum": [
+                        "ready",
+                        "unavailable"
+                      ]
                     },
                     "checks": {
                       "type": "array",
@@ -479,14 +596,24 @@
                           },
                           "status": {
                             "type": "string",
-                            "enum": ["ok", "failed", "timeout"]
+                            "enum": [
+                              "ok",
+                              "failed",
+                              "timeout"
+                            ]
                           }
                         },
-                        "required": ["name", "status"]
+                        "required": [
+                          "name",
+                          "status"
+                        ]
                       }
                     }
                   },
-                  "required": ["status", "checks"]
+                  "required": [
+                    "status",
+                    "checks"
+                  ]
                 }
               }
             }
@@ -526,10 +653,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -569,10 +701,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -586,7 +723,10 @@
                   "properties": {
                     "status": {
                       "type": "string",
-                      "enum": ["ready", "unavailable"]
+                      "enum": [
+                        "ready",
+                        "unavailable"
+                      ]
                     },
                     "checks": {
                       "type": "array",
@@ -598,14 +738,24 @@
                           },
                           "status": {
                             "type": "string",
-                            "enum": ["ok", "failed", "timeout"]
+                            "enum": [
+                              "ok",
+                              "failed",
+                              "timeout"
+                            ]
                           }
                         },
-                        "required": ["name", "status"]
+                        "required": [
+                          "name",
+                          "status"
+                        ]
                       }
                     }
                   },
-                  "required": ["status", "checks"]
+                  "required": [
+                    "status",
+                    "checks"
+                  ]
                 }
               }
             }
@@ -615,7 +765,9 @@
     },
     "/.well-known/jwks.json": {
       "get": {
-        "tags": ["keys"],
+        "tags": [
+          "keys"
+        ],
         "summary": "Public signing keys",
         "description": "The Ed25519 public keys that verify this service’s access tokens: `next`, `active` and recently retired keys, at most 20, public parameters only. A new key is listed at least five minutes before it signs.",
         "responses": {
@@ -633,11 +785,15 @@
                         "properties": {
                           "kty": {
                             "type": "string",
-                            "enum": ["OKP"]
+                            "enum": [
+                              "OKP"
+                            ]
                           },
                           "crv": {
                             "type": "string",
-                            "enum": ["Ed25519"]
+                            "enum": [
+                              "Ed25519"
+                            ]
                           },
                           "x": {
                             "type": "string",
@@ -651,20 +807,33 @@
                           },
                           "alg": {
                             "type": "string",
-                            "enum": ["EdDSA"]
+                            "enum": [
+                              "EdDSA"
+                            ]
                           },
                           "use": {
                             "type": "string",
-                            "enum": ["sig"]
+                            "enum": [
+                              "sig"
+                            ]
                           }
                         },
-                        "required": ["kty", "crv", "x", "kid", "alg", "use"],
+                        "required": [
+                          "kty",
+                          "crv",
+                          "x",
+                          "kid",
+                          "alg",
+                          "use"
+                        ],
                         "additionalProperties": false
                       },
                       "maxItems": 20
                     }
                   },
-                  "required": ["keys"]
+                  "required": [
+                    "keys"
+                  ]
                 }
               }
             }
@@ -704,10 +873,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -747,10 +921,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -760,14 +939,22 @@
     },
     "/v1/client/sign-ups": {
       "post": {
-        "tags": ["sign-up"],
+        "tags": [
+          "sign-up"
+        ],
         "summary": "Start a sign-up",
         "description": "Emails a six-digit code. Nothing but the attempt is created until the code is verified. Send exactly one of `organizationName` (the user becomes the Owner of a new Organization) or `invitationToken` (the user joins the inviting Organization). An address that already has an account gets the same answer and a notice instead of a code.",
         "parameters": [
           {
             "schema": {
               "type": "string",
-              "enum": ["web", "ios", "android", "server", "browser"],
+              "enum": [
+                "web",
+                "ios",
+                "android",
+                "server",
+                "browser"
+              ],
               "description": "The kind of client; defaults to web. `browser` gets the refresh token in a `Set-Cookie` header instead of the body (see the `BrowserFlowResponse` shape)."
             },
             "required": false,
@@ -849,10 +1036,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -892,10 +1084,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -935,10 +1132,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1018,10 +1220,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1061,10 +1268,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1104,10 +1316,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1155,10 +1372,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1168,7 +1390,9 @@
     },
     "/v1/client/sign-ups/{id}/verify-email": {
       "post": {
-        "tags": ["sign-up"],
+        "tags": [
+          "sign-up"
+        ],
         "summary": "Verify the emailed code",
         "description": "Creates the account, its Organization membership and its first session in one step. If the membership cannot be made, no account is created and the code still works.",
         "parameters": [
@@ -1194,7 +1418,13 @@
           {
             "schema": {
               "type": "string",
-              "enum": ["web", "ios", "android", "server", "browser"]
+              "enum": [
+                "web",
+                "ios",
+                "android",
+                "server",
+                "browser"
+              ]
             },
             "required": false,
             "name": "x-tula-client",
@@ -1274,10 +1504,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1317,10 +1552,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1360,10 +1600,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1403,10 +1648,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1446,10 +1696,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1513,10 +1768,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1556,10 +1816,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1599,10 +1864,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1642,10 +1912,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1655,7 +1930,9 @@
     },
     "/v1/client/sign-ups/{id}/resend-code": {
       "post": {
-        "tags": ["sign-up"],
+        "tags": [
+          "sign-up"
+        ],
         "summary": "Send the code again",
         "parameters": [
           {
@@ -1680,7 +1957,13 @@
           {
             "schema": {
               "type": "string",
-              "enum": ["web", "ios", "android", "server", "browser"]
+              "enum": [
+                "web",
+                "ios",
+                "android",
+                "server",
+                "browser"
+              ]
             },
             "required": false,
             "name": "x-tula-client",
@@ -1750,10 +2033,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1793,10 +2081,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1836,10 +2129,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1879,10 +2177,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1922,10 +2225,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -1965,10 +2273,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2008,10 +2321,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2021,14 +2339,22 @@
     },
     "/v1/client/sign-ins": {
       "post": {
-        "tags": ["sign-in"],
+        "tags": [
+          "sign-in"
+        ],
         "summary": "Start a sign-in",
         "description": "The answer is the same whether or not the address has an account.",
         "parameters": [
           {
             "schema": {
               "type": "string",
-              "enum": ["web", "ios", "android", "server", "browser"],
+              "enum": [
+                "web",
+                "ios",
+                "android",
+                "server",
+                "browser"
+              ],
               "description": "The kind of client; defaults to web. `browser` gets the refresh token in a `Set-Cookie` header instead of the body (see the `BrowserFlowResponse` shape)."
             },
             "required": false,
@@ -2110,10 +2436,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2153,10 +2484,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2196,10 +2532,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2239,10 +2580,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2252,7 +2598,9 @@
     },
     "/v1/client/sign-ins/{id}/password": {
       "post": {
-        "tags": ["sign-in"],
+        "tags": [
+          "sign-in"
+        ],
         "summary": "Submit the password",
         "description": "Completes the sign-in with tokens. An account with no Organization is refused with `auth.no_organization`, and one whose Organization was deleted with `organization.deleted`; neither gets a session. Wrong passwords are counted per address (about 11, then one every 15 minutes) and refused with 429 `rate.limited` and `Retry-After`, except from a device that holds a valid known-device cookie for the account (set by an earlier sign-in), which has a counter of its own. If the core service cannot answer, the answer is 503 `membership.unavailable` with `Retry-After`: nothing is counted against the account and the same attempt can be submitted again.",
         "parameters": [
@@ -2278,7 +2626,13 @@
           {
             "schema": {
               "type": "string",
-              "enum": ["web", "ios", "android", "server", "browser"]
+              "enum": [
+                "web",
+                "ios",
+                "android",
+                "server",
+                "browser"
+              ]
             },
             "required": false,
             "name": "x-tula-client",
@@ -2358,10 +2712,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2401,10 +2760,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2452,10 +2816,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2495,10 +2864,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2538,10 +2912,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2581,10 +2960,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2624,10 +3008,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2667,10 +3056,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2710,10 +3104,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2753,10 +3152,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2804,10 +3208,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2817,7 +3226,9 @@
     },
     "/v1/client/password-policy": {
       "get": {
-        "tags": ["sign-up"],
+        "tags": [
+          "sign-up"
+        ],
         "summary": "The password rules",
         "responses": {
           "200": {
@@ -2865,10 +3276,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2908,10 +3324,1511 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/client/google/start": {
+      "post": {
+        "tags": [
+          "google"
+        ],
+        "summary": "Start Sign in with Google",
+        "description": "Starts a Sign in with Google with an intent (sign_in or sign_up) and an optional same-origin returnTo path. It runs the OpenID Connect authorization-code flow with PKCE (S256), a state and a nonce, keeps them in an attempt that lives 10 minutes, sets a short-lived attempt cookie (named tula_oidc, with the __Secure- prefix outside local only, because Safari refuses a __Secure- cookie over http even on loopback) that holds the attempt secret, and answers the authorizationUrl to send the browser to (https, or http to a loopback host in local development; a consumer also checks its host against an allow-list). It asks for openid, email and profile only, with no offline access. The returnTo is checked against the portal route allow-list and kept in the attempt; it is never read from the callback. oidc.disabled (404) when Google is not set up; oidc.provider_unavailable (503) with a Retry-After header when Google cannot be reached.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Required, and exactly one of `SESSION_ALLOWED_ORIGINS`, else `auth.forbidden`."
+            },
+            "required": false,
+            "description": "Required, and exactly one of `SESSION_ALLOWED_ORIGINS`, else `auth.forbidden`.",
+            "name": "origin",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "intent": {
+                    "type": "string",
+                    "enum": [
+                      "sign_in",
+                      "sign_up"
+                    ]
+                  },
+                  "returnTo": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "intent"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Where to send the browser; the attempt secret is in the `Set-Cookie` header.",
+            "headers": {
+              "set-cookie": {
+                "schema": {
+                  "type": "string",
+                  "description": "`__Secure-tula_oidc=<secret>; Path=/v1/client/google/; Max-Age=600; HttpOnly; Secure; SameSite=Lax` (no prefix and no `Secure` in local development)."
+                },
+                "required": false,
+                "description": "`__Secure-tula_oidc=<secret>; Path=/v1/client/google/; Max-Age=600; HttpOnly; Secure; SameSite=Lax` (no prefix and no `Secure` in local development)."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "authorizationUrl": {
+                      "type": "string",
+                      "maxLength": 2048
+                    }
+                  },
+                  "required": [
+                    "authorizationUrl"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`request.invalid`: The request is not valid.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "request.invalid": {
+                    "value": {
+                      "error": {
+                        "code": "request.invalid",
+                        "message": "The request is not valid."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`auth.forbidden`: You are not allowed to do this.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "auth.forbidden": {
+                    "value": {
+                      "error": {
+                        "code": "auth.forbidden",
+                        "message": "You are not allowed to do this."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`oidc.disabled`: Sign in with Google is not available.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "oidc.disabled": {
+                    "value": {
+                      "error": {
+                        "code": "oidc.disabled",
+                        "message": "Sign in with Google is not available."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`request.too_large`: The request body is too large.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "request.too_large": {
+                    "value": {
+                      "error": {
+                        "code": "request.too_large",
+                        "message": "The request body is too large."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`request.unsupported_media_type`: The request content type is not supported.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "request.unsupported_media_type": {
+                    "value": {
+                      "error": {
+                        "code": "request.unsupported_media_type",
+                        "message": "The request content type is not supported."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate.limited`: Too many requests. Try again later.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "rate.limited": {
+                    "value": {
+                      "error": {
+                        "code": "rate.limited",
+                        "message": "Too many requests. Try again later."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server.internal`: Something went wrong on our side.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "server.internal": {
+                    "value": {
+                      "error": {
+                        "code": "server.internal",
+                        "message": "Something went wrong on our side."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`oidc.provider_unavailable`: Google is not available right now. Try again later.\n`server.unavailable`: The service is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "oidc.provider_unavailable": {
+                    "value": {
+                      "error": {
+                        "code": "oidc.provider_unavailable",
+                        "message": "Google is not available right now. Try again later."
+                      }
+                    }
+                  },
+                  "server.unavailable": {
+                    "value": {
+                      "error": {
+                        "code": "server.unavailable",
+                        "message": "The service is temporarily unavailable."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/client/google/callback": {
+      "get": {
+        "tags": [
+          "google"
+        ],
+        "summary": "Sign in with Google: the redirect back",
+        "description": "Where Google sends the browser back, with a code and a state (or an error). The state must match the attempt cookie and the attempt is single-use; a replayed, expired or mismatched state is oidc.state_invalid. If the person cancels at Google (error=access_denied) the code is oidc.access_denied, and any other error from Google is oidc.provider_unavailable. The code is exchanged once, with the PKCE verifier, and the ID token is verified (RS256 only, issuer, audience, expiry, nonce, a present sub and email, and a verified email). A Google account that is already known, by its sub and never by its email, is signed in with the same checks as a password sign-in, and the answer is a 302 to the portal with the refresh cookie on it. No token appears in a URL. A new Google user is created by nothing here: the 302 goes to /sign-up/google?attempt=<id> and the person finishes with complete. An existing password account with the same email is linked only when Google verified the email, else oidc.email_unverified. It answers every outcome with a 302 except oidc.disabled (404): a failure redirects the browser to /sign-in?error=<code>, so oidc.state_invalid, oidc.email_unverified, oidc.access_denied, oidc.provider_unavailable (whose catalogue status is 503, with a Retry-After header only where it is a real response), auth.user_banned, auth.no_organization, organization.deleted and membership.unavailable come back as the error parameter of that redirect, and the catalogue status of a code is not the HTTP status of this response. Codes, tokens and Authorization headers are never logged.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Google's authorization code."
+            },
+            "required": false,
+            "description": "Google's authorization code.",
+            "name": "code",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "The state `start` made."
+            },
+            "required": false,
+            "description": "The state `start` made.",
+            "name": "state",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Google's error, if any."
+            },
+            "required": false,
+            "description": "Google's error, if any.",
+            "name": "error",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "The attempt secret, set by `start` (`__Secure-tula_oidc` outside local development)."
+            },
+            "required": false,
+            "description": "The attempt secret, set by `start` (`__Secure-tula_oidc` outside local development).",
+            "name": "tula_oidc",
+            "in": "cookie"
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Every outcome but `oidc.disabled`. Success: to `returnTo`, with the refresh cookie. A new person: to `/sign-up/google?attempt=<id>`. A failure: to `/sign-in?error=<code>`.",
+            "headers": {
+              "location": {
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              },
+              "set-cookie": {
+                "schema": {
+                  "type": "string",
+                  "description": "On success the refresh cookie (as sign-in sets it) and the cleared attempt cookie."
+                },
+                "required": false,
+                "description": "On success the refresh cookie (as sign-in sets it) and the cleared attempt cookie."
+              }
+            }
+          },
+          "404": {
+            "description": "`oidc.disabled`: Sign in with Google is not available.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "oidc.disabled": {
+                    "value": {
+                      "error": {
+                        "code": "oidc.disabled",
+                        "message": "Sign in with Google is not available."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`request.too_large`: The request body is too large.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "request.too_large": {
+                    "value": {
+                      "error": {
+                        "code": "request.too_large",
+                        "message": "The request body is too large."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/client/google/complete": {
+      "post": {
+        "tags": [
+          "google"
+        ],
+        "summary": "Finish Sign in with Google for a new user",
+        "description": "Finishes the sign-up of a new Google user: it takes the attempt id (the secret is in the cookie) and exactly one of an organizationName or an invitationToken. It creates the Organization or joins the invited one through the same sign-up path as an email sign-up, with no emailed code because Google verified the email, and stores the user and a google identity with no password. For an invitation the Google email must equal the invited address, else oidc.invitation_mismatch (403); a user who already belongs to an Organization gets membership.already_member (409). An attempt that is missing, used or expired is oidc.state_invalid (400). An attempt is single-use. A repeat is refused with oidc.state_invalid (400) and nothing is created twice. Answers the browser flow response (id, kind, expiresAt, a complete step and the session); the refresh token is in the cookie, never in the body. The attempt secret, tokens and the email are never logged.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Required, and exactly one of `SESSION_ALLOWED_ORIGINS`, else `auth.forbidden`."
+            },
+            "required": false,
+            "description": "Required, and exactly one of `SESSION_ALLOWED_ORIGINS`, else `auth.forbidden`.",
+            "name": "origin",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "The attempt secret, set by `start` (`__Secure-tula_oidc` outside local development)."
+            },
+            "required": false,
+            "description": "The attempt secret, set by `start` (`__Secure-tula_oidc` outside local development).",
+            "name": "tula_oidc",
+            "in": "cookie"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "attemptId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{1,128}$"
+                  },
+                  "organizationName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "invitationToken": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  }
+                },
+                "required": [
+                  "attemptId"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The browser flow response: no refresh token in the body, it is in the `Set-Cookie` header.",
+            "headers": {
+              "set-cookie": {
+                "schema": {
+                  "type": "string",
+                  "description": "The refresh cookie, as sign-in sets it, and the cleared attempt cookie."
+                },
+                "required": false,
+                "description": "The refresh cookie, as sign-in sets it, and the cleared attempt cookie."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "sign_in",
+                        "sign_up"
+                      ]
+                    },
+                    "expiresAt": {
+                      "type": "string",
+                      "maxLength": 64,
+                      "format": "date-time"
+                    },
+                    "step": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "complete"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "status"
+                      ]
+                    },
+                    "session": {
+                      "type": "object",
+                      "properties": {
+                        "sessionId": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128
+                        },
+                        "accessToken": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 4096
+                        },
+                        "accessTokenExpiresAt": {
+                          "type": "string",
+                          "maxLength": 64,
+                          "format": "date-time"
+                        },
+                        "organization": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            },
+                            "role": {
+                              "type": "string",
+                              "enum": [
+                                "owner",
+                                "admin",
+                                "manager",
+                                "rep"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "role"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "sessionId",
+                        "accessToken",
+                        "accessTokenExpiresAt",
+                        "organization"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "expiresAt",
+                    "step",
+                    "session"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`oidc.state_invalid`: This sign-in has expired or is not valid. Start again.\n`request.invalid`: The request is not valid.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "oidc.state_invalid": {
+                    "value": {
+                      "error": {
+                        "code": "oidc.state_invalid",
+                        "message": "This sign-in has expired or is not valid. Start again."
+                      }
+                    }
+                  },
+                  "request.invalid": {
+                    "value": {
+                      "error": {
+                        "code": "request.invalid",
+                        "message": "The request is not valid."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`auth.forbidden`: You are not allowed to do this.\n`oidc.invitation_mismatch`: Use the Google account that matches the invited email address.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "auth.forbidden": {
+                    "value": {
+                      "error": {
+                        "code": "auth.forbidden",
+                        "message": "You are not allowed to do this."
+                      }
+                    }
+                  },
+                  "oidc.invitation_mismatch": {
+                    "value": {
+                      "error": {
+                        "code": "oidc.invitation_mismatch",
+                        "message": "Use the Google account that matches the invited email address."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`oidc.disabled`: Sign in with Google is not available.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "oidc.disabled": {
+                    "value": {
+                      "error": {
+                        "code": "oidc.disabled",
+                        "message": "Sign in with Google is not available."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`request.too_large`: The request body is too large.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "request.too_large": {
+                    "value": {
+                      "error": {
+                        "code": "request.too_large",
+                        "message": "The request body is too large."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`request.unsupported_media_type`: The request content type is not supported.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "request.unsupported_media_type": {
+                    "value": {
+                      "error": {
+                        "code": "request.unsupported_media_type",
+                        "message": "The request content type is not supported."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`signup.organization_name_invalid`: Enter a valid Organization name.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "signup.organization_name_invalid": {
+                    "value": {
+                      "error": {
+                        "code": "signup.organization_name_invalid",
+                        "message": "Enter a valid Organization name."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate.limited`: Too many requests. Try again later.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "rate.limited": {
+                    "value": {
+                      "error": {
+                        "code": "rate.limited",
+                        "message": "Too many requests. Try again later."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server.internal`: Something went wrong on our side.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "server.internal": {
+                    "value": {
+                      "error": {
+                        "code": "server.internal",
+                        "message": "Something went wrong on our side."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`membership.unavailable`: Organization membership is unavailable right now. Try again shortly.\n`server.unavailable`: The service is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "membership.unavailable": {
+                    "value": {
+                      "error": {
+                        "code": "membership.unavailable",
+                        "message": "Organization membership is unavailable right now. Try again shortly."
+                      }
+                    }
+                  },
+                  "server.unavailable": {
+                    "value": {
+                      "error": {
+                        "code": "server.unavailable",
+                        "message": "The service is temporarily unavailable."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/client/auth-options": {
+      "get": {
+        "tags": [
+          "google"
+        ],
+        "summary": "Which sign-in providers are on",
+        "description": "Tells a client which sign-in providers are on, so the portal can hide the Continue with Google button when Google is not set up. The auth service owns this route; it is a new route, not a change to an existing one. It needs no session and returns nothing about any account.",
+        "responses": {
+          "200": {
+            "description": "The providers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "providers": {
+                      "type": "object",
+                      "properties": {
+                        "google": {
+                          "type": "boolean",
+                          "default": false
+                        }
+                      },
+                      "default": {
+                        "google": false
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`request.too_large`: The request body is too large.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "request.too_large": {
+                    "value": {
+                      "error": {
+                        "code": "request.too_large",
+                        "message": "The request body is too large."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate.limited`: Too many requests. Try again later.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "rate.limited": {
+                    "value": {
+                      "error": {
+                        "code": "rate.limited",
+                        "message": "Too many requests. Try again later."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server.internal`: Something went wrong on our side.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "server.internal": {
+                    "value": {
+                      "error": {
+                        "code": "server.internal",
+                        "message": "Something went wrong on our side."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`server.unavailable`: The service is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "server.unavailable": {
+                    "value": {
+                      "error": {
+                        "code": "server.unavailable",
+                        "message": "The service is temporarily unavailable."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -2921,7 +4838,9 @@
     },
     "/v1/client/sessions/refresh": {
       "post": {
-        "tags": ["sessions"],
+        "tags": [
+          "sessions"
+        ],
         "summary": "Refresh a session",
         "description": "Trades a refresh token for new tokens. Each refresh token works once; presenting a spent one after a short grace period ends the whole session (`session.reuse_detected`). If the core service cannot answer, the answer is 503 `membership.unavailable` with `Retry-After` and the refresh token is not spent: send the same one again. A user whose Organization was deleted gets `organization.deleted` and the session ends. Client type `browser` (`x-tula-client: browser`) sends no body: the refresh token is read from the cookie only (a body or header token is ignored, a missing cookie is `session.invalid_token`), `Origin` is checked first (`auth.forbidden`), and the new refresh token is set in the cookie and omitted from the body.",
         "parameters": [
@@ -3039,10 +4958,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3116,10 +5040,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3185,10 +5114,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3238,10 +5172,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3281,10 +5220,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3324,10 +5268,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3367,10 +5316,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3410,10 +5364,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3423,7 +5382,9 @@
     },
     "/v1/client/sessions/sign-out": {
       "post": {
-        "tags": ["sessions"],
+        "tags": [
+          "sessions"
+        ],
         "summary": "Sign out",
         "description": "Ends the session of a refresh token. Succeeds for an unknown or spent token too. Client type `browser` sends no body: the token is read from the cookie only, `Origin` is checked first (`auth.forbidden`), and the cookie is cleared whether or not a session was found.",
         "parameters": [
@@ -3527,10 +5488,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3570,10 +5536,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3613,10 +5584,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3656,10 +5632,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3699,10 +5680,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3712,7 +5698,9 @@
     },
     "/v1/client/sessions": {
       "get": {
-        "tags": ["sessions"],
+        "tags": [
+          "sessions"
+        ],
         "summary": "The user’s sessions",
         "description": "Usable sessions, newest first, a page at a time.",
         "parameters": [
@@ -3770,12 +5758,18 @@
                       "maxItems": 100
                     },
                     "nextCursor": {
-                      "type": ["string", "null"],
+                      "type": [
+                        "string",
+                        "null"
+                      ],
                       "minLength": 1,
                       "maxLength": 512
                     }
                   },
-                  "required": ["items", "nextCursor"]
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ]
                 }
               }
             }
@@ -3815,10 +5809,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3898,10 +5897,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3941,10 +5945,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -3984,10 +5993,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -4027,10 +6041,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -4040,7 +6059,9 @@
     },
     "/v1/client/me": {
       "get": {
-        "tags": ["sessions"],
+        "tags": [
+          "sessions"
+        ],
         "summary": "The signed-in user",
         "description": "Needs a Bearer access token. A token whose session ended is refused at once.",
         "parameters": [
@@ -4141,10 +6162,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -4184,10 +6210,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -4227,10 +6258,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
@@ -4270,10 +6306,15 @@
                           "additionalProperties": {}
                         }
                       },
-                      "required": ["code", "message"]
+                      "required": [
+                        "code",
+                        "message"
+                      ]
                     }
                   },
-                  "required": ["error"]
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }

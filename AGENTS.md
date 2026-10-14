@@ -27,7 +27,7 @@ a descendant of the `46d13ba` ticket 1.7 named). Ported as-is (`TULA_MASTER_KEY`
 engine, lockout, flow-attempt, verification-code and refresh logic. Adapted: ids and tenancy, the
 contract's error envelope, the sign-up (an Organization name or an invitation).
 
-Left out: OAuth, passkeys, MFA, SMS, webhooks, hooks, the admin API, native apps, API keys, the
+Left out: OAuth other than Google (below), passkeys, MFA, SMS, webhooks, hooks, the admin API, native apps, API keys, the
 event outbox (no `user.created` yet), password reset and change, email change, session profiles,
 device binding and step-up (one hybrid policy: access 60 s, idle 7 d, absolute 30 d), audit-log
 writes, per-environment settings (fixed policy: 10 to 128 characters, common and breached
@@ -67,7 +67,9 @@ The shape in `.claude/COMMON.md` is built; modules are under `src/modules/<name>
 `POST /v1/client/sign-ups` (+ `/{id}/verify-email`, `/{id}/resend-code`),
 `POST /v1/client/sign-ins` (+ `/{id}/password`), `POST /v1/client/sessions/refresh`,
 `POST /v1/client/sessions/sign-out`, `GET /v1/client/sessions`, `GET /v1/client/me`. An attempt's
-secret travels in `x-tula-attempt`; the client kind in `x-tula-client`.
+secret travels in `x-tula-attempt`; the client kind in `x-tula-client`. Sign in with Google (ADR
+0019, `modules/oidc`, rules in `.claude/rules/oidc.md`): `POST /v1/client/google/start`,
+`GET /v1/client/google/callback`, `POST /v1/client/google/complete`, `GET /v1/client/auth-options`.
 
 ## Browser sessions (refresh cookie, hub issue 41)
 
@@ -127,7 +129,9 @@ and `CORE_INTERNAL_TOKEN` (32+ characters, never logged) (all five required outs
 `HASH_QUEUE`, `SIGN_IN_CONCURRENCY`, `SIGN_IN_QUEUE`, `BREACH_CHECK_CONCURRENCY`,
 `BREACH_CHECK_QUEUE`, `MAIL_LOCAL_URL`, `MAIL_LOCAL_FROM` (local only), `SESSION_ALLOWED_ORIGINS` (exact, distinct origins,
 comma-separated, https outside `local`, no wildcard; required outside `local`),
-`SESSION_COOKIE_INSECURE` (`true` only in `local`), `COUNTER_HASH_KEY` and `DEVICE_COOKIE_KEY` (32 to
+`SESSION_COOKIE_INSECURE` (`true` only in `local`), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
+(never logged) and `GOOGLE_REDIRECT_URI` (all three or none; none means Google is off and the
+routes answer `oidc.disabled`), `GOOGLE_ISSUER_URL` (`local` only, the fake provider), `TRUSTED_PROXY_HOPS` (1 to 10, default 1 in `local`, required elsewhere: how many proxies append to `X-Forwarded-For`, the edge plus the portal proxy in production; the per-source limits of the Google routes take the client from that many hops from the right and share one `unknown` bucket when the header is shorter), `COUNTER_HASH_KEY` and `DEVICE_COOKIE_KEY` (32 to
 512 printable characters each, different, required outside `local`, never logged; rotation:
 `.claude/rules/lockout.md`). Add a key in both files.
 

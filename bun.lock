@@ -10,7 +10,7 @@
         "hono": "^4.13.13",
         "jose": "^6.2.12",
         "pg": "^8.23.1",
-        "tula-closeline-contract": "git+ssh://git@github.com/Tula-Solutions/tula-closeline-contract.git#v0.6.0",
+        "tula-closeline-contract": "git+ssh://git@github.com/Tula-Solutions/tula-closeline-contract.git#v0.14.0",
         "tula-closeline-db": "git+ssh://git@github.com/Tula-Solutions/tula-closeline-db.git#v0.9.0",
         "tula-closeline-kit": "git+ssh://git@github.com/Tula-Solutions/tula-closeline-kit.git#v0.8.1",
         "zod": "^4.6.5",
@@ -297,7 +297,7 @@
 
     "tslib": ["tslib@2.8.1", "", {}, "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w=="],
 
-    "tula-closeline-contract": ["tula-closeline-contract@git+ssh://git@github.com/Tula-Solutions/tula-closeline-contract.git#2a126709314c0cdc645764990c437dc19cfc469a", { "peerDependencies": { "zod": "^4.6.5" } }, "2a126709314c0cdc645764990c437dc19cfc469a"],
+    "tula-closeline-contract": ["tula-closeline-contract@git+ssh://git@github.com/Tula-Solutions/tula-closeline-contract.git#5cb563b178a5773d43f07b8d8958c7acd3feea37", { "peerDependencies": { "zod": "^4.6.5" } }, "5cb563b178a5773d43f07b8d8958c7acd3feea37"],
 
     "tula-closeline-db": ["tula-closeline-db@git+ssh://git@github.com/Tula-Solutions/tula-closeline-db.git#13452902a3b9095bcd9d457d65d773e3817c63a3", { "dependencies": { "drizzle-orm": "^0.45.3", "pg": "^8.23.1" } }, "13452902a3b9095bcd9d457d65d773e3817c63a3"],
 

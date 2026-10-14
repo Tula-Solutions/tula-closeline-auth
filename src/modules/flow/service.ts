@@ -37,6 +37,7 @@ import {
   ATTEMPT_SECRET_PREFIX,
   type FlowKind,
   type FlowStatus,
+  isOidcStatus,
   type passwordRequestSchema,
   type signUpRequestSchema,
 } from './schema'
@@ -108,7 +109,10 @@ export type FlowResult = {
   deviceCookie?: string
 }
 
-function stepFor(attempt: FlowAttemptRecord, state: State): FlowResult['step'] {
+/** An attempt of the email and password flows: never one of Sign in with Google's steps. */
+type FlowStepAttempt = FlowAttemptRecord & { status: FlowStatus }
+
+function stepFor(attempt: FlowStepAttempt, state: State): FlowResult['step'] {
   if (attempt.status === 'needs_email_verification') {
     return {
       status: attempt.status,
@@ -119,7 +123,7 @@ function stepFor(attempt: FlowAttemptRecord, state: State): FlowResult['step'] {
   return { status: attempt.status }
 }
 
-function present(attempt: FlowAttemptRecord, state: State, secret?: string): FlowResult {
+function present(attempt: FlowStepAttempt, state: State, secret?: string): FlowResult {
   return {
     id: attempt.id,
     kind: attempt.kind,
@@ -132,11 +136,14 @@ function present(attempt: FlowAttemptRecord, state: State, secret?: string): Flo
 async function start(
   deps: Container,
   tenant: Tenant,
-  input: Pick<FlowAttemptRecord, 'id' | 'kind' | 'status' | 'identifier'> & { state: State }
-): Promise<{ attempt: FlowAttemptRecord; secret: string }> {
+  input: Pick<FlowAttemptRecord, 'id' | 'kind' | 'identifier'> & {
+    status: FlowStatus
+    state: State
+  }
+): Promise<{ attempt: FlowStepAttempt; secret: string }> {
   const now = deps.clock.now()
   const secret = `${ATTEMPT_SECRET_PREFIX}${randomToken()}`
-  const attempt: FlowAttemptRecord = {
+  const attempt: FlowStepAttempt = {
     ...input,
     projectId: tenant.projectId,
     environmentId: tenant.environmentId,
@@ -164,7 +171,7 @@ async function load(
   tenant: Tenant,
   kind: FlowKind,
   ref: AttemptRef
-): Promise<{ attempt: FlowAttemptRecord; state: State }> {
+): Promise<{ attempt: FlowStepAttempt; state: State }> {
   const attempt = UUID.test(ref.id)
     ? await deps.flowAttempts.findById(tenant.environmentId, ref.id)
     : null
@@ -176,12 +183,14 @@ async function load(
     ref.secret === undefined ||
     !presented ||
     attempt.kind !== kind ||
+    // A Sign in with Google attempt has its own routes and cookie; its secret opens nothing here.
+    isOidcStatus(attempt.status) ||
     attempt.completedAt !== null ||
     attempt.expiresAt.getTime() <= deps.clock.now().getTime()
   ) {
     throw fail(AUTH_ERRORS['flow.not_found'])
   }
-  return { attempt, state: stateSchema.parse(attempt.state) }
+  return { attempt: attempt as FlowStepAttempt, state: stateSchema.parse(attempt.state) }
 }
 
 /** Starts a sign-up: checks the address and password, emails a code, creates nothing else. */
@@ -398,7 +407,7 @@ export async function settleOrphan(
  * is left open: the sign-up goes on, and if its account commits that settles the case, otherwise
  * the sweep meets the same conflict and gives the case up. Never throws.
  */
-async function learnOrganization(
+export async function learnOrganization(
   deps: Pick<Container, 'logger' | 'abandonCases' | 'reportError'>,
   _context: ClientContext,
   tenant: Tenant,

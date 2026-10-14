@@ -1,3 +1,4 @@
+import { MemoryFlowAttemptStore } from '~/adapters/memory/flow-attempts'
 import { MemoryUserRepository } from '~/adapters/memory/users'
 import { userRepositorySuite } from '~/adapters/user-repository.suite'
 
@@ -6,8 +7,12 @@ const tenant = (environmentId: string) => ({
   environmentId,
 })
 
-userRepositorySuite('memory', async () => ({
-  users: new MemoryUserRepository(),
-  a: tenant('00000000-0000-7000-8000-00000000e001'),
-  b: tenant('00000000-0000-7000-8000-00000000e002'),
-}))
+userRepositorySuite('memory', async () => {
+  const attempts = new MemoryFlowAttemptStore()
+  return {
+    users: new MemoryUserRepository(undefined, attempts),
+    attempts,
+    a: tenant('00000000-0000-7000-8000-00000000e001'),
+    b: tenant('00000000-0000-7000-8000-00000000e002'),
+  }
+})

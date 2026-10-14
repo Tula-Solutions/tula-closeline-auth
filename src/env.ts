@@ -53,6 +53,102 @@ function counterSecret(name: string) {
     .optional()
 }
 
+/** The path Google sends the browser back to; the redirect URI must end here. */
+export const GOOGLE_CALLBACK_PATH = '/v1/client/google/callback'
+
+/** Google's issuer, used when `GOOGLE_ISSUER_URL` is not set. */
+export const GOOGLE_DEFAULT_ISSUER = 'https://accounts.google.com'
+
+/** The Google settings `checkGoogle` reads. */
+type GoogleSettings = {
+  ENVIRONMENT: 'local' | 'dev' | 'staging' | 'prod'
+  GOOGLE_CLIENT_ID?: string | undefined
+  GOOGLE_CLIENT_SECRET?: string | undefined
+  GOOGLE_REDIRECT_URI?: string | undefined
+  GOOGLE_ISSUER_URL?: string | undefined
+  SESSION_ALLOWED_ORIGINS?: string | undefined
+}
+
+/**
+ * Validates the Google settings: all three or none; the redirect URI is a plain URL at the
+ * callback path (https and on an allowed session origin outside `local`); the issuer override is
+ * `local` only. Messages name the key and the rule, never a value (a secret or a URL).
+ */
+function checkGoogle(env: GoogleSettings, ctx: z.RefinementCtx): void {
+  const issue = (key: string, message: string) =>
+    ctx.addIssue({ code: 'custom', path: [key], message })
+  const core = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI'] as const
+  const set = core.filter((key) => env[key] !== undefined)
+  if (set.length > 0 && set.length < core.length) {
+    for (const key of core) {
+      if (env[key] === undefined) {
+        issue(key, `${key} is required with the other GOOGLE_ settings (set all three or none)`)
+      }
+    }
+  }
+  if (env.GOOGLE_ISSUER_URL !== undefined) {
+    if (env.ENVIRONMENT !== 'local') {
+      issue('GOOGLE_ISSUER_URL', 'GOOGLE_ISSUER_URL is accepted only when ENVIRONMENT is local')
+    } else if (set.length < core.length) {
+      issue('GOOGLE_ISSUER_URL', 'GOOGLE_ISSUER_URL needs the three GOOGLE_ settings')
+    }
+    if (!isIssuerUrl(env.GOOGLE_ISSUER_URL)) {
+      issue(
+        'GOOGLE_ISSUER_URL',
+        'GOOGLE_ISSUER_URL must be an http(s) URL with no credentials, query or fragment'
+      )
+    }
+  }
+  const redirect = env.GOOGLE_REDIRECT_URI
+  if (redirect === undefined) {
+    return
+  }
+  if (!URL.canParse(redirect)) {
+    issue('GOOGLE_REDIRECT_URI', 'GOOGLE_REDIRECT_URI must be a URL')
+    return
+  }
+  const url = new URL(redirect)
+  const plain = url.username === '' && url.password === '' && url.search === '' && url.hash === ''
+  if (!plain || url.pathname !== GOOGLE_CALLBACK_PATH) {
+    issue(
+      'GOOGLE_REDIRECT_URI',
+      `GOOGLE_REDIRECT_URI must end in ${GOOGLE_CALLBACK_PATH} with no credentials, query or fragment`
+    )
+  }
+  if (env.ENVIRONMENT === 'local') {
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+      issue('GOOGLE_REDIRECT_URI', 'GOOGLE_REDIRECT_URI must be an http(s) URL')
+    }
+    return
+  }
+  if (url.protocol !== 'https:') {
+    issue('GOOGLE_REDIRECT_URI', 'GOOGLE_REDIRECT_URI must use https outside local')
+  }
+  const allowed =
+    env.SESSION_ALLOWED_ORIGINS === undefined ? [] : splitOrigins(env.SESSION_ALLOWED_ORIGINS)
+  if (!allowed.includes(url.origin)) {
+    issue(
+      'GOOGLE_REDIRECT_URI',
+      'GOOGLE_REDIRECT_URI must be on one of the SESSION_ALLOWED_ORIGINS origins'
+    )
+  }
+}
+
+/** Whether a value is an http(s) issuer URL with nothing but an origin and a path. */
+function isIssuerUrl(value: string): boolean {
+  if (!URL.canParse(value)) {
+    return false
+  }
+  const url = new URL(value)
+  return (
+    (url.protocol === 'http:' || url.protocol === 'https:') &&
+    url.username === '' &&
+    url.password === '' &&
+    url.search === '' &&
+    url.hash === ''
+  )
+}
+
 const schema = z
   .object({
     /** Which deployment this is. No default: a deploy that forgets it must fail at boot. */
@@ -194,6 +290,26 @@ const schema = z
      * device is unknown until it signs in again.
      */
     DEVICE_COOKIE_KEY: counterSecret('DEVICE_COOKIE_KEY'),
+    /**
+     * How many proxies in front of this service append to `X-Forwarded-For` (the edge plus the
+     * portal's proxy, for instance): an integer from 1 to 10, default 1 in `local`; required elsewhere (boot fails without it). The per-source rate limits
+     * take the client from that many hops from the right of the header, so a value the client
+     * wrote at the front is never used. A header with fewer hops (or none) shares one bucket.
+     */
+    TRUSTED_PROXY_HOPS: z.coerce.number().int().min(1).max(10).optional(),
+    /**
+     * Sign in with Google (ADR 0019): the OAuth client id, client secret and redirect URI, set all
+     * together or not at all (a half-set configuration fails at boot). Unset, the feature is off:
+     * the routes answer `oidc.disabled`. The secret is never logged.
+     */
+    GOOGLE_CLIENT_ID: z.string().min(1).max(256).optional(),
+    GOOGLE_CLIENT_SECRET: z.string().min(1).max(512).optional(),
+    GOOGLE_REDIRECT_URI: z.string().min(1).max(2048).optional(),
+    /**
+     * The OpenID issuer to talk to instead of Google, for the local fake provider. Accepted only
+     * when `ENVIRONMENT=local` and the three settings above are set.
+     */
+    GOOGLE_ISSUER_URL: z.string().min(1).max(2048).optional(),
   })
   .superRefine((env, ctx) => {
     // Messages name the key and the rule, never the value: a URL can carry credentials.
@@ -228,6 +344,7 @@ const schema = z
         })
       }
     }
+    checkGoogle(env, ctx)
     if (env.MAIL_LOCAL_URL !== undefined && localMailboxOrigin(env.MAIL_LOCAL_URL) === undefined) {
       ctx.addIssue({
         code: 'custom',
@@ -259,6 +376,7 @@ const schema = z
       'CORE_BASE_URL',
       'CORE_INTERNAL_TOKEN',
       'SESSION_ALLOWED_ORIGINS',
+      'TRUSTED_PROXY_HOPS',
       'COUNTER_HASH_KEY',
       'DEVICE_COOKIE_KEY',
     ] as const) {
@@ -371,4 +489,28 @@ export function sessionCookieInsecure(env: Env): boolean {
 /** The origins allowed to call the cookie-authenticated routes; empty when none is configured. */
 export function allowedOrigins(env: Env): readonly string[] {
   return env.SESSION_ALLOWED_ORIGINS === undefined ? [] : splitOrigins(env.SESSION_ALLOWED_ORIGINS)
+}
+
+/** The Google settings in force, or `undefined` when Sign in with Google is off. */
+export function googleConfig(
+  env: Env
+): { clientId: string; clientSecret: string; redirectUri: string; issuer: string } | undefined {
+  if (
+    env.GOOGLE_CLIENT_ID === undefined ||
+    env.GOOGLE_CLIENT_SECRET === undefined ||
+    env.GOOGLE_REDIRECT_URI === undefined
+  ) {
+    return undefined
+  }
+  return {
+    clientId: env.GOOGLE_CLIENT_ID,
+    clientSecret: env.GOOGLE_CLIENT_SECRET,
+    redirectUri: env.GOOGLE_REDIRECT_URI,
+    issuer: (env.GOOGLE_ISSUER_URL ?? GOOGLE_DEFAULT_ISSUER).replace(/\/+$/, ''),
+  }
+}
+
+/** The number of proxies that append to `X-Forwarded-For`: the configured one, or 1. */
+export function trustedProxyHops(env: Env): number {
+  return env.TRUSTED_PROXY_HOPS ?? 1
 }

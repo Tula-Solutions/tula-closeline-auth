@@ -33,7 +33,11 @@ describeVerificationTokenStore('PostgresVerificationTokenStore on a real server'
 
 userRepositorySuite('PostgresUserRepository on a real server', async () => {
   await resetAuthData(owner)
-  return { users: new PostgresUserRepository(db), ...(await integrationTenants(db)) }
+  return {
+    users: new PostgresUserRepository(db),
+    attempts: new PostgresFlowAttemptStore(db),
+    ...(await integrationTenants(db)),
+  }
 })
 
 sessionStoreSuite('PostgresSessionStore on a real server', async () => {

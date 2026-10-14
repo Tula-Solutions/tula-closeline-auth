@@ -40,6 +40,47 @@ function listed(path: string, method: string): Record<string, string[]> {
 const ROUTES: [method: string, path: string, codes: Record<string, string[]>][] = [
   [
     'post',
+    '/v1/client/google/start',
+    {
+      '400': ['request.invalid'],
+      '403': ['auth.forbidden'],
+      '404': ['oidc.disabled'],
+      '413': ['request.too_large'],
+      '415': ['request.unsupported_media_type'],
+      '429': ['rate.limited'],
+      '500': ['server.internal'],
+      '503': ['oidc.provider_unavailable', 'server.unavailable'],
+    },
+  ],
+  // Every other outcome of the callback is a 302 to /sign-in?error=<code>.
+  ['get', '/v1/client/google/callback', { '404': ['oidc.disabled'], '413': ['request.too_large'] }],
+  [
+    'post',
+    '/v1/client/google/complete',
+    {
+      '400': ['oidc.state_invalid', 'request.invalid'],
+      '403': ['auth.forbidden', 'oidc.invitation_mismatch'],
+      '404': ['oidc.disabled'],
+      '413': ['request.too_large'],
+      '415': ['request.unsupported_media_type'],
+      '422': ['signup.organization_name_invalid'],
+      '429': ['rate.limited'],
+      '500': ['server.internal'],
+      '503': ['membership.unavailable', 'server.unavailable'],
+    },
+  ],
+  [
+    'get',
+    '/v1/client/auth-options',
+    {
+      '413': ['request.too_large'],
+      '429': ['rate.limited'],
+      '500': ['server.internal'],
+      '503': ['server.unavailable'],
+    },
+  ],
+  [
+    'post',
     '/v1/client/sign-ups',
     {
       '400': ['request.invalid'],

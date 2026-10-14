@@ -8,6 +8,7 @@ import { MemoryFlowAttemptStore } from '~/adapters/memory/flow-attempts'
 import { MemoryLockout } from '~/adapters/memory/lockout'
 import { MemoryMailer } from '~/adapters/memory/mailer'
 import { createMemoryMembership, type MemoryMembership } from '~/adapters/memory/membership'
+import { createMemoryOidcProvider, type MemoryOidcProvider } from '~/adapters/memory/oidc-provider'
 import { MemoryRateLimiter } from '~/adapters/memory/rate-limiter'
 import { MemorySessionStore } from '~/adapters/memory/sessions'
 import { createMemorySigningKeyStore } from '~/adapters/memory/signing-keys'
@@ -39,6 +40,8 @@ export type TestDeps = Container & {
   mailer: MemoryMailer
   /** The breach checker, with the passwords it should call breached. */
   breachChecker: MemoryBreachChecker
+  /** The OpenID provider: a fake Google behind the real adapter, with controls. */
+  oidc: MemoryOidcProvider
 }
 
 /** Builds a container of in-memory doubles and a fixed clock; `overrides` replace any field. */
@@ -65,13 +68,14 @@ export function createTestDeps(
     CORE_INTERNAL_TOKEN: 'test-core-token-0123456789abcdef-test',
     // A deployed environment must name an allowed origin; `local` leaves it unset.
     ...(overrides.env?.ENVIRONMENT !== undefined && overrides.env.ENVIRONMENT !== 'local'
-      ? { SESSION_ALLOWED_ORIGINS: 'https://app.example.com' }
+      ? { SESSION_ALLOWED_ORIGINS: 'https://app.example.com', TRUSTED_PROXY_HOPS: '1' }
       : {}),
     ...overrides.env,
   })
 
   const clock = createFixedClock('2026-01-01T00:00:00Z')
   const abandonCases = createMemoryAbandonCases(clock)
+  const flowAttempts = new MemoryFlowAttemptStore()
   return {
     env,
     logger: createLogger({
@@ -90,13 +94,15 @@ export function createTestDeps(
     keyedHash: createKeyedHash(masterKey(env)),
     membership: createMemoryMembership(clock),
     abandonCases,
-    users: new MemoryUserRepository((environmentId, caseId) =>
-      abandonCases.settle(environmentId, caseId)
+    users: new MemoryUserRepository(
+      (environmentId, caseId) => abandonCases.settle(environmentId, caseId),
+      flowAttempts
     ),
-    flowAttempts: new MemoryFlowAttemptStore(),
+    flowAttempts,
     verificationTokens: new MemoryVerificationTokenStore(),
     sessions: new MemorySessionStore(),
     mailer: new MemoryMailer(),
+    oidc: createMemoryOidcProvider(clock),
     rateLimiter: new MemoryRateLimiter(clock),
     lockout: new MemoryLockout(clock),
     counterPurger: createMemoryCounterPurger(),

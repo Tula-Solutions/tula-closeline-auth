@@ -4,6 +4,7 @@ import {
   counterHashKey,
   databaseUrl,
   deviceCookieKey,
+  googleConfig,
   LOCAL_COUNTER_HASH_KEY,
   LOCAL_DEVICE_COOKIE_KEY,
   LOCAL_MASTER_KEY,
@@ -11,6 +12,7 @@ import {
   masterKey,
   publicUrl,
   sessionCookieInsecure,
+  trustedProxyHops,
 } from './env'
 
 test('configuration falls back to defaults for everything but the environment', () => {
@@ -115,6 +117,7 @@ const DEPLOYED = {
   SESSION_ALLOWED_ORIGINS: 'https://app.example.com',
   COUNTER_HASH_KEY: 'h'.repeat(40),
   DEVICE_COOKIE_KEY: 'd'.repeat(40),
+  TRUSTED_PROXY_HOPS: '1',
 }
 
 test('a deploy outside local boots with everything set', () => {
@@ -340,6 +343,7 @@ describe('the browser session settings', () => {
     SESSION_ALLOWED_ORIGINS: 'https://app.example.com',
     COUNTER_HASH_KEY: 'h'.repeat(40),
     DEVICE_COOKIE_KEY: 'd'.repeat(40),
+    TRUSTED_PROXY_HOPS: '1',
   }
 
   test('both are unset by default: secure cookie, and no origin is allowed', () => {
@@ -491,6 +495,7 @@ describe('the counter hash key and the known-device cookie key', () => {
     ...DEPLOYED,
     COUNTER_HASH_KEY: 'h'.repeat(40),
     DEVICE_COOKIE_KEY: 'd'.repeat(40),
+    TRUSTED_PROXY_HOPS: '1',
   }
 
   test.each(['dev', 'staging', 'prod'])(
@@ -573,6 +578,7 @@ describe('the published development keys', () => {
     ...DEPLOYED,
     COUNTER_HASH_KEY: 'h'.repeat(40),
     DEVICE_COOKIE_KEY: 'd'.repeat(40),
+    TRUSTED_PROXY_HOPS: '1',
   }
 
   test.each([
@@ -606,4 +612,144 @@ describe('the published development keys', () => {
       })
     ).not.toThrow()
   })
+})
+
+describe('the Sign in with Google settings', () => {
+  const deployed = {
+    ENVIRONMENT: 'prod',
+    REGION: 'eu',
+    DATABASE_URL: 'postgres://closeline_auth:x@db.example.com/closeline',
+    AUTH_MASTER_KEY: 'ab'.repeat(32),
+    PUBLIC_URL: 'https://auth.example.com',
+    CORE_BASE_URL: 'https://core.example.com',
+    CORE_INTERNAL_TOKEN: 'c'.repeat(40),
+    SESSION_ALLOWED_ORIGINS: 'https://app.example.com',
+    COUNTER_HASH_KEY: 'h'.repeat(40),
+    DEVICE_COOKIE_KEY: 'd'.repeat(40),
+    TRUSTED_PROXY_HOPS: '1',
+  }
+  const google = {
+    GOOGLE_CLIENT_ID: 'client-id',
+    GOOGLE_CLIENT_SECRET: 'super-secret-value',
+    GOOGLE_REDIRECT_URI: 'https://app.example.com/v1/client/google/callback',
+  }
+
+  test('none set means off', () => {
+    expect(googleConfig(loadEnv(deployed))).toBeUndefined()
+    expect(googleConfig(loadEnv({ ENVIRONMENT: 'local', REGION: 'us' }))).toBeUndefined()
+  })
+
+  test('all three set means on, with Google as the issuer', () => {
+    expect(googleConfig(loadEnv({ ...deployed, ...google }))).toEqual({
+      clientId: 'client-id',
+      clientSecret: 'super-secret-value',
+      redirectUri: 'https://app.example.com/v1/client/google/callback',
+      issuer: 'https://accounts.google.com',
+    })
+  })
+
+  test.each(['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI'] as const)(
+    'a half-set configuration without %s fails at boot, in every environment',
+    (missing) => {
+      const { [missing]: _removed, ...partial } = google
+      for (const base of [deployed, { ENVIRONMENT: 'local', REGION: 'us' }]) {
+        expect(() => loadEnv({ ...base, ...partial })).toThrow(missing)
+      }
+    }
+  )
+
+  test('a failure never repeats the secret or the URL', () => {
+    const attempt = () =>
+      loadEnv({ ...deployed, ...google, GOOGLE_REDIRECT_URI: 'http://app.example.com/wrong' })
+    expect(attempt).toThrow()
+    try {
+      attempt()
+    } catch (error) {
+      expect(String(error)).not.toContain('super-secret-value')
+      expect(String(error)).not.toContain('http://app.example.com/wrong')
+    }
+  })
+
+  test.each([
+    ['http outside local', 'http://app.example.com/v1/client/google/callback'],
+    ['an origin that is not allowed', 'https://other.example.com/v1/client/google/callback'],
+    ['another path', 'https://app.example.com/callback'],
+    ['a query', 'https://app.example.com/v1/client/google/callback?x=1'],
+    ['not a URL', 'nonsense'],
+  ])('refuses a redirect URI with %s outside local', (_name, uri) => {
+    expect(() => loadEnv({ ...deployed, ...google, GOOGLE_REDIRECT_URI: uri })).toThrow(
+      'GOOGLE_REDIRECT_URI'
+    )
+  })
+
+  test('local accepts http and any origin, but still the callback path', () => {
+    const local = { ENVIRONMENT: 'local', REGION: 'us', ...google }
+    expect(
+      googleConfig(
+        loadEnv({
+          ...local,
+          GOOGLE_REDIRECT_URI: 'http://127.0.0.1:3002/v1/client/google/callback',
+        })
+      )?.redirectUri
+    ).toBe('http://127.0.0.1:3002/v1/client/google/callback')
+    expect(() => loadEnv({ ...local, GOOGLE_REDIRECT_URI: 'http://127.0.0.1:3002/x' })).toThrow(
+      'GOOGLE_REDIRECT_URI'
+    )
+  })
+
+  test('the issuer override is local only and needs the other three', () => {
+    const local = { ENVIRONMENT: 'local', REGION: 'us' }
+    const issuer = 'http://127.0.0.1:4010'
+    expect(
+      googleConfig(loadEnv({ ...local, ...google, GOOGLE_ISSUER_URL: `${issuer}/` }))?.issuer
+    ).toBe(issuer)
+    expect(() => loadEnv({ ...local, GOOGLE_ISSUER_URL: issuer })).toThrow('GOOGLE_ISSUER_URL')
+    expect(() => loadEnv({ ...deployed, ...google, GOOGLE_ISSUER_URL: issuer })).toThrow(
+      'GOOGLE_ISSUER_URL'
+    )
+    expect(() => loadEnv({ ...local, ...google, GOOGLE_ISSUER_URL: 'ftp://x' })).toThrow(
+      'GOOGLE_ISSUER_URL'
+    )
+  })
+})
+
+describe('the trusted proxy hops', () => {
+  test('default to one, and are an integer from 1 to 10', () => {
+    expect(trustedProxyHops(loadEnv({ ENVIRONMENT: 'local', REGION: 'us' }))).toBe(1)
+    expect(
+      trustedProxyHops(loadEnv({ ENVIRONMENT: 'local', REGION: 'us', TRUSTED_PROXY_HOPS: '2' }))
+    ).toBe(2)
+    for (const value of ['0', '11', '1.5', 'two', '']) {
+      expect(() =>
+        loadEnv({ ENVIRONMENT: 'local', REGION: 'us', TRUSTED_PROXY_HOPS: value })
+      ).toThrow('TRUSTED_PROXY_HOPS')
+    }
+  })
+})
+
+describe('the trusted proxy hops outside local', () => {
+  const deployed = {
+    ENVIRONMENT: 'prod',
+    REGION: 'eu',
+    DATABASE_URL: 'postgres://closeline_auth:x@db.example.com/closeline',
+    AUTH_MASTER_KEY: 'ab'.repeat(32),
+    PUBLIC_URL: 'https://auth.example.com',
+    CORE_BASE_URL: 'https://core.example.com',
+    CORE_INTERNAL_TOKEN: 'c'.repeat(40),
+    SESSION_ALLOWED_ORIGINS: 'https://app.example.com',
+    COUNTER_HASH_KEY: 'h'.repeat(40),
+    DEVICE_COOKIE_KEY: 'd'.repeat(40),
+  }
+
+  test.each(['dev', 'staging', 'prod'])(
+    '%s fails at boot without TRUSTED_PROXY_HOPS',
+    (environment) => {
+      expect(() => loadEnv({ ...deployed, ENVIRONMENT: environment })).toThrow('TRUSTED_PROXY_HOPS')
+      expect(
+        trustedProxyHops(
+          loadEnv({ ...deployed, ENVIRONMENT: environment, TRUSTED_PROXY_HOPS: '2' })
+        )
+      ).toBe(2)
+    }
+  )
 })

@@ -422,6 +422,7 @@ describe('turning off certificate checks (ADR 0013)', () => {
     SESSION_ALLOWED_ORIGINS: 'https://app.example.com',
     COUNTER_HASH_KEY: 'h'.repeat(40),
     DEVICE_COOKIE_KEY: 'd'.repeat(40),
+    TRUSTED_PROXY_HOPS: '1',
   }
 
   /** Runs `run` with `NODE_TLS_REJECT_UNAUTHORIZED=0` set, and puts the old value back. */

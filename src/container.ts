@@ -9,6 +9,7 @@ import {
   systemClock,
 } from 'tula-closeline-kit'
 import { HibpBreachChecker } from '~/adapters/breach/hibp'
+import { createGoogleProvider } from '~/adapters/http/google'
 import { createHttpMembership } from '~/adapters/http/membership'
 import { createMailpitMailer, DEFAULT_LOCAL_MAIL_FROM } from '~/adapters/mailpit/mailer'
 import { createPlaceholderMembership } from '~/adapters/placeholder/membership'
@@ -27,8 +28,9 @@ import { PostgresUserRepository } from '~/adapters/postgres/users'
 import { PostgresVerificationTokenStore } from '~/adapters/postgres/verification-tokens'
 import { uuidV7Ids } from '~/adapters/system/ids'
 import { createUnconfiguredMailer } from '~/adapters/unconfigured/mailer'
+import { createUnconfiguredOidcProvider } from '~/adapters/unconfigured/oidc-provider'
 import { describeError } from '~/describe-error'
-import { counterHashKey, databaseUrl, type Env, loadEnv, masterKey } from '~/env'
+import { counterHashKey, databaseUrl, type Env, googleConfig, loadEnv, masterKey } from '~/env'
 import { SERVICE } from '~/info'
 import { createWorkLimits, type WorkLimits } from '~/lib/concurrency'
 import { createKeyedHash, type KeyedHash } from '~/lib/keyed-hash'
@@ -43,6 +45,7 @@ import type { IdGenerator } from '~/ports/id-generator'
 import type { Lockout } from '~/ports/lockout'
 import type { Mailer } from '~/ports/mailer'
 import type { MembershipClaims } from '~/ports/membership'
+import type { OidcProvider } from '~/ports/oidc-provider'
 import type { RateLimiter } from '~/ports/rate-limiter'
 import type { SessionStore } from '~/ports/session-store'
 import type { SigningKeyStore } from '~/ports/signing-key-store'
@@ -108,6 +111,8 @@ export type Container = {
   sessions: SessionStore
   /** Sends the verification emails. */
   mailer: Mailer
+  /** The OpenID provider behind Sign in with Google (ADR 0019); unconfigured when it is off. */
+  oidc: OidcProvider
   /** Per-key request limits, counted in Postgres so every instance shares them (ADR 0014). */
   rateLimiter: RateLimiter
   /** Backs off repeated wrong passwords per address and per known device, counted in Postgres. */
@@ -198,6 +203,22 @@ export function createMailer(env: Env, logger: Pick<Logger, 'warn'>): Mailer {
   })
 }
 
+/**
+ * Chooses the OpenID provider: Google (or, in `local` only, the issuer `GOOGLE_ISSUER_URL` names)
+ * when the three `GOOGLE_` settings are set, otherwise the unconfigured one, which answers
+ * `oidc.disabled`. The client secret is passed to the adapter and nowhere else.
+ */
+export function createOidcProvider(
+  env: Env,
+  clock: Clock,
+  logger: Pick<Logger, 'warn'>
+): OidcProvider {
+  const config = googleConfig(env)
+  return config === undefined
+    ? createUnconfiguredOidcProvider()
+    : createGoogleProvider({ ...config, clock, logger })
+}
+
 /** The single composition root: the only place adapters and process-wide objects are constructed. */
 export function createContainer(env: Env = loadEnv(), options: ContainerOptions = {}): Container {
   const logger = createLogger({
@@ -261,6 +282,7 @@ export function createContainer(env: Env = loadEnv(), options: ContainerOptions 
     // The production mail provider is still undecided (hub issue #35): outside a local mailbox,
     // sending fails with `mail.unavailable`.
     mailer: createMailer(env, logger),
+    oidc: createOidcProvider(env, systemClock, logger),
     rateLimiter: createPostgresRateLimiter(counters),
     lockout: createPostgresLockout(counters),
     abandonCases: createPostgresAbandonCases(database.db),
