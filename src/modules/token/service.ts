@@ -78,6 +78,7 @@ export async function signer(deps: TokenDeps, tenant: Tenant): Promise<Signer> {
 export type ApiKeySigner = (
   key: Pick<ApiKeyVerification, 'apiKeyId' | 'organizationId'> & {
     scopes: readonly ApiKeyScope[]
+    expiresAt?: string | null
   },
   now: Date
 ) => Promise<{ accessToken: string; accessTokenExpiresAt: string }>
@@ -92,7 +93,11 @@ export async function apiKeySigner(deps: TokenDeps, tenant: Tenant): Promise<Api
   const issuer = publicUrl(deps.env)
   return async (key, now) => {
     const iat = Math.floor(now.getTime() / 1000)
-    const exp = iat + API_KEY_TOKEN_TTL_SECONDS
+    const keyExpiry = key.expiresAt ? Math.floor(new Date(key.expiresAt).getTime() / 1000) : null
+    const exp = Math.min(iat + API_KEY_TOKEN_TTL_SECONDS, keyExpiry ?? Number.POSITIVE_INFINITY)
+    if (exp <= iat) {
+      throw new Error('the API key has already expired')
+    }
     const accessToken = await new SignJWT({
       act: API_KEY_ACTOR,
       org: key.organizationId,

@@ -64,6 +64,26 @@ describe('POST /v1/token', () => {
     expect(JSON.stringify(claims)).not.toContain(SECRET)
   })
 
+  test('the token never outlives the key: exp is the key expiry when sooner than 10 minutes', async () => {
+    const { deps, exchange } = await setup()
+    const soon = `clk_${'s'.repeat(43)}`
+    const expiresAt = new Date(deps.clock.now().getTime() + 120_000)
+    deps.membership.addApiKey(soon, {
+      apiKeyId: formatId('akey', crypto.randomUUID()),
+      organizationId,
+      scopes: ['prospects:read'],
+      roleCeiling: 'rep',
+      expiresAt: expiresAt.toISOString(),
+    })
+    const response = await exchange(soon)
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { accessToken: string; accessTokenExpiresAt: string }
+    expect(decodeJwt(body.accessToken).exp).toBe(Math.floor(expiresAt.getTime() / 1000))
+    expect(body.accessTokenExpiresAt).toBe(
+      new Date(Math.floor(expiresAt.getTime() / 1000) * 1000).toISOString()
+    )
+  })
+
   test('an unknown, a revoked, an expired and a malformed key get one identical refusal', async () => {
     const { deps, exchange } = await setup()
     const revoked = `clk_${'r'.repeat(43)}`

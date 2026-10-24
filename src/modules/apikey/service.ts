@@ -82,7 +82,12 @@ export async function exchange(
     await deps.lockout.clear(lockKey)
     throw new MembershipOutage(error, error instanceof MembershipRejected)
   }
-  const token = await sign(verified, deps.clock.now())
+  const issuedAt = deps.clock.now()
+  if (verified.expiresAt !== null && new Date(verified.expiresAt) <= issuedAt) {
+    // Core normally refuses an expired key; the same answer here if its clock ran behind ours.
+    throw fail(APIKEY_ERRORS['apikey.invalid'])
+  }
+  const token = await sign(verified, issuedAt)
   await deps.lockout.clear(lockKey)
   return token
 }
