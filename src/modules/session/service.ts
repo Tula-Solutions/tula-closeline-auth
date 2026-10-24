@@ -206,7 +206,12 @@ export async function authenticate(
   })
   let token: VerifiedToken
   try {
-    token = await verifier.verify(accessToken)
+    const identity = await verifier.verify(accessToken)
+    if (identity.actor !== 'member') {
+      // A session belongs to a person: an API key's token never authenticates one.
+      throw fail(ERRORS['auth.token_invalid'])
+    }
+    token = identity
   } catch (error) {
     if (error instanceof TokenVerificationError) {
       throw fail(

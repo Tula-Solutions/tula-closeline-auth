@@ -10,6 +10,9 @@ import {
 } from 'tula-closeline-contract'
 import type { Clock } from '~/ports/clock'
 import {
+  ApiKeyRateLimited,
+  ApiKeyRefused,
+  type ApiKeyVerification,
   type Membership,
   MembershipBusy,
   type MembershipClaims,
@@ -38,6 +41,12 @@ export type MemoryMembership = MembershipClaims & {
   refuseAbandons: (refuse: boolean) => void
   /** Make the next `count` abandon calls fail as a transient outage (core busy, 503). */
   failNextAbandons: (count: number) => void
+  /** Teach core a key: `secret` verifies as `key` until it is revoked or expires. */
+  addApiKey: (secret: string, key: ApiKeyVerification) => void
+  /** Revoke the key with this secret: it now refuses as `revoked`. */
+  revokeApiKey: (secret: string) => void
+  /** Make verifying this secret answer core's 429, naming this pause (or none). */
+  rateLimitApiKey: (secret: string, retryAfterMs?: number) => void
   /** Every Organization created, in order. */
   readonly organizations: { name: string; owner: UserId; organizationId: string }[]
   /** The email and name core was given for each member, in order (create and accept). */
@@ -51,6 +60,7 @@ export type MemoryMembership = MembershipClaims & {
     lookup: number
     abandon: number
     aborted: number
+    verifyApiKey: number
   }
 }
 
@@ -64,7 +74,7 @@ export function createMemoryMembership(clock: Clock = { now: () => new Date() })
   const createdAt = new Map<string, Date>()
   const profiles: MemoryMembership['profiles'] = []
   const abandons: MemoryMembership['abandons'] = []
-  const calls = { create: 0, accept: 0, lookup: 0, abandon: 0, aborted: 0 }
+  const calls = { create: 0, accept: 0, lookup: 0, abandon: 0, aborted: 0, verifyApiKey: 0 }
   let broken = false
   let refusing = false
   let failing = 0
@@ -94,6 +104,9 @@ export function createMemoryMembership(clock: Clock = { now: () => new Date() })
       await gate
     }
   }
+  const apiKeys = new Map<string, ApiKeyVerification>()
+  const revokedKeys = new Set<string>()
+  const limitedKeys = new Map<string, number | undefined>()
   const newOrganizationId = () => formatId('org', crypto.randomUUID())
 
   return {
@@ -123,6 +136,28 @@ export function createMemoryMembership(clock: Clock = { now: () => new Date() })
     },
     setOrganizationStatus: (organizationId, status) => void statuses.set(organizationId, status),
     forget: (userId) => void members.delete(userId),
+    addApiKey: (secret, key) => void apiKeys.set(secret, key),
+    revokeApiKey: (secret) => void revokedKeys.add(secret),
+    rateLimitApiKey: (secret, retryAfterMs) => void limitedKeys.set(secret, retryAfterMs),
+    async verifyApiKey(secret, signal) {
+      calls.verifyApiKey += 1
+      guard()
+      await proceed(signal)
+      if (limitedKeys.has(secret)) {
+        throw new ApiKeyRateLimited(limitedKeys.get(secret))
+      }
+      const key = apiKeys.get(secret)
+      if (!key) {
+        throw new ApiKeyRefused('invalid')
+      }
+      if (
+        revokedKeys.has(secret) ||
+        (key.expiresAt !== null && new Date(key.expiresAt) <= clock.now())
+      ) {
+        throw new ApiKeyRefused('revoked')
+      }
+      return key
+    },
     async createOrganization({ userId, name, email, memberName, idempotencyKey, signal }) {
       calls.create += 1
       guard()

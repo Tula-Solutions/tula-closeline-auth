@@ -27,7 +27,14 @@ a descendant of the `46d13ba` ticket 1.7 named). Ported as-is (`TULA_MASTER_KEY`
 engine, lockout, flow-attempt, verification-code and refresh logic. Adapted: ids and tenancy, the
 contract's error envelope, the sign-up (an Organization name or an invitation).
 
-Left out: OAuth other than Google (below), passkeys, MFA, SMS, webhooks, hooks, the admin API, native apps, API keys, the
+API keys (ADR 0023): `POST /v1/token` (`src/modules/apikey/`) takes `{ apiKey }`, asks core's `POST
+/internal/api-keys/verify` through the membership port (`verifyApiKey`: timeout, one jittered retry on
+a fault, never on a 4xx), and mints a 10 minute token with `act: 'api_key'`, the key id as `sub`,
+`org`, `region` and `scp`, no role and no session. Every refusal of a key is `apikey.invalid`. Failed
+attempts are counted per source in Postgres through the lockout port (20 free, then 30 s doubling);
+a success forgets the count. Core's 429 passes through with `Retry-After`.
+
+Left out: OAuth other than Google (below), passkeys, MFA, SMS, webhooks, hooks, the admin API, native apps, API key management (core's), the
 event outbox (no `user.created` yet), password reset and change, email change, session profiles,
 device binding and step-up (one hybrid policy: access 60 s, idle 7 d, absolute 30 d), audit-log
 writes, per-environment settings (fixed policy: 10 to 128 characters, common and breached

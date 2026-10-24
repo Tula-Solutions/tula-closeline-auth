@@ -2,6 +2,7 @@ import type { OpenAPIHono } from '@hono/zod-openapi'
 import type { Container } from '~/container'
 import { createBaseApp } from '~/http/base'
 import type { AppEnv } from '~/http/types'
+import { createApiKeyRouter } from '~/modules/apikey/router'
 import { createFlowRouter } from '~/modules/flow/router'
 import { createHealthRouter } from '~/modules/health/router'
 import { createJwksRouter } from '~/modules/jwks/router'
@@ -18,6 +19,7 @@ export function createApp(container: Container): OpenAPIHono<AppEnv> {
   app.route('/', createJwksRouter(container))
   app.route('/', createFlowRouter(container))
   app.route('/', createOidcRouter(container))
+  app.route('/', createApiKeyRouter(container))
   app.route('/', createSessionRouter(container))
   app.route('/', createUserRouter(container))
   serveOpenApi(app)

@@ -1,4 +1,5 @@
 import {
+  APIKEY_ERRORS,
   AUTH_ERRORS,
   type AuthErrorCode,
   type CommonErrorCode,
@@ -8,15 +9,21 @@ import {
 import { AppError } from 'tula-closeline-kit'
 
 /**
- * A code this service may answer with: one of `AUTH_ERRORS` or the common `ERRORS`, both defined
- * in `tula-closeline-contract`. This service defines no code of its own.
+ * A code this service may answer with: one of `AUTH_ERRORS`, the common `ERRORS`, or the two
+ * `APIKEY_ERRORS` the token exchange answers with, all defined in `tula-closeline-contract`. This service defines no code of its own.
  */
-export type ServiceErrorCode = AuthErrorCode | CommonErrorCode
+export type ServiceErrorCode =
+  | AuthErrorCode
+  | CommonErrorCode
+  | 'apikey.invalid'
+  | 'apikey.rate_limited'
 
 /** Every definition this service may answer with, by code: the contract's, never a local one. */
 export const DEFINITIONS: Readonly<Record<ServiceErrorCode, ErrorDefinition<ServiceErrorCode>>> = {
   ...ERRORS,
   ...AUTH_ERRORS,
+  'apikey.invalid': APIKEY_ERRORS['apikey.invalid'],
+  'apikey.rate_limited': APIKEY_ERRORS['apikey.rate_limited'],
 }
 
 /**

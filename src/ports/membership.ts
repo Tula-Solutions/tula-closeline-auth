@@ -1,4 +1,11 @@
-import type { OrganizationId, OrganizationStatus, Role, UserId } from 'tula-closeline-contract'
+import type {
+  ApiKeyId,
+  ApiKeyScope,
+  OrganizationId,
+  OrganizationStatus,
+  Role,
+  UserId,
+} from 'tula-closeline-contract'
 
 /** The Organization a user belongs to and their role in it: what a token's `org` and `role` say. */
 export type Membership = { organizationId: OrganizationId; role: Role }
@@ -8,6 +15,41 @@ export type Membership = { organizationId: OrganizationId; role: Role }
  * Organization (core's answer; `modules/membership` decides what each status means for a token).
  */
 export type MembershipLookup = Membership & { organizationStatus: OrganizationStatus }
+
+/** What core says an API key secret stands for: who it acts for and what it may do. */
+export type ApiKeyVerification = {
+  apiKeyId: ApiKeyId
+  organizationId: OrganizationId
+  scopes: readonly ApiKeyScope[]
+  /** The most a route that checks roles may treat the key as. Not carried into the token. */
+  roleCeiling: Role
+  /** When the key stops working, or `null` when it never does. */
+  expiresAt: string | null
+}
+
+/**
+ * Thrown when core does not accept an API key secret: it matches no key (`invalid`) or its key
+ * was revoked or has expired (`revoked`). The caller answers both the same way.
+ */
+export class ApiKeyRefused extends Error {
+  readonly reason: 'invalid' | 'revoked'
+  constructor(reason: 'invalid' | 'revoked') {
+    super(`api key refused: ${reason}`)
+    this.name = 'ApiKeyRefused'
+    this.reason = reason
+  }
+}
+
+/** Thrown when core's per-key rate limit refused the call; carries the pause core asked for. */
+export class ApiKeyRateLimited extends Error {
+  /** The pause core asked for in milliseconds, or `undefined` when it named none. */
+  readonly retryAfterMs: number | undefined
+  constructor(retryAfterMs?: number) {
+    super('api key rate limited')
+    this.name = 'ApiKeyRateLimited'
+    this.retryAfterMs = retryAfterMs
+  }
+}
 
 /** Why the core service refused a membership step; the caller turns it into a contract error. */
 export type MembershipRefusal = 'invitation_invalid' | 'organization_name_invalid'
@@ -172,4 +214,15 @@ export interface MembershipClaims {
    * @throws MembershipUnavailable on any failure.
    */
   forUser(userId: UserId, signal?: AbortSignal): Promise<MembershipLookup | null>
+
+  /**
+   * Asks core what an API key secret stands for (ADR 0023). A read with no effects: an adapter
+   * retries it once on a transient failure, never on a 4xx.
+   *
+   * @param secret - The presented key. Never logged or put in an error.
+   * @param signal - As for {@link MembershipClaims.createOrganization}.
+   * @throws ApiKeyRefused when core does not accept it; ApiKeyRateLimited on core's 429;
+   *   MembershipUnavailable on any other failure.
+   */
+  verifyApiKey(secret: string, signal?: AbortSignal): Promise<ApiKeyVerification>
 }

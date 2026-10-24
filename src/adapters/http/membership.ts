@@ -1,4 +1,5 @@
 import {
+  APIKEY_ERRORS,
   CORE_ERRORS,
   type CoreErrorCode,
   emailSchema,
@@ -17,6 +18,8 @@ import {
   internalMembershipResponseSchema,
   invitationTokenSchema,
   organizationNameSchema,
+  verifyApiKeyRequestSchema,
+  verifyApiKeyResponseSchema,
 } from 'tula-closeline-contract'
 import {
   createInternalClient,
@@ -28,6 +31,8 @@ import {
 import type { z } from 'zod'
 import { createConcurrencyLimiter, Saturated } from '~/lib/concurrency'
 import {
+  ApiKeyRateLimited,
+  ApiKeyRefused,
   type Membership,
   MembershipBusy,
   type MembershipClaims,
@@ -471,6 +476,43 @@ export function createHttpMembership(options: HttpMembershipOptions): Membership
       if (done.organizationId !== params.data.organizationId) {
         throw new MembershipUnavailable('core answered about another Organization')
       }
+    },
+
+    async verifyApiKey(secret, signal) {
+      const request = verifyApiKeyRequestSchema.safeParse({ secret })
+      if (!request.success) {
+        // A secret of a shape no key has: core would say so, and nothing is sent.
+        throw new ApiKeyRefused('invalid')
+      }
+      // A read: retried once on a network error, a timeout or a 5xx; a 4xx is never retried.
+      const answer = await send(
+        '/internal/api-keys/verify',
+        request.data,
+        crypto.randomUUID(),
+        { retry: true, timeoutMs: lookupTimeoutMs },
+        signal
+      )
+      if (answer.status === 200) {
+        return accept(verifyApiKeyResponseSchema, answer)
+      }
+      if (answer.status === 401 || answer.status === 403) {
+        // Core's own refusals are told apart by the code in the body, never by the status alone.
+        const code = errorBodySchema.safeParse(answer.json).data?.error.code
+        if (code === APIKEY_ERRORS['apikey.invalid'].code) {
+          throw new ApiKeyRefused('invalid')
+        }
+        if (code === APIKEY_ERRORS['apikey.revoked'].code) {
+          throw new ApiKeyRefused('revoked')
+        }
+        throw new CoreCredentialsRejected(answer.status)
+      }
+      if (answer.status === 429) {
+        const code = errorBodySchema.safeParse(answer.json).data?.error.code
+        if (code === APIKEY_ERRORS['apikey.rate_limited'].code) {
+          throw new ApiKeyRateLimited(answer.retryAfterMs)
+        }
+      }
+      throw new MembershipUnavailable(`core answered HTTP ${answer.status}`)
     },
 
     async forUser(userId, signal) {

@@ -1,6 +1,12 @@
 import { expect, test } from 'bun:test'
 import { Glob } from 'bun'
-import { AUTH_ERRORS, CORE_ERRORS, ERRORS, errorCodeSchema } from 'tula-closeline-contract'
+import {
+  APIKEY_ERRORS,
+  AUTH_ERRORS,
+  CORE_ERRORS,
+  ERRORS,
+  errorCodeSchema,
+} from 'tula-closeline-contract'
 import { fail, rateLimited } from '~/errors'
 
 /**
@@ -51,8 +57,14 @@ const CORE_CODE_FILES = ['adapters/http/membership.ts', 'testing/fake-core.ts']
 const NOT_A_RESPONSE = new Set(['unsafe.code'])
 
 test('no area.reason literal in shipped source is outside the contract', async () => {
-  const answerable = new Set<string>([...Object.keys(ERRORS), ...Object.keys(AUTH_ERRORS)])
-  const coreOnly = new Set<string>(Object.keys(CORE_ERRORS))
+  // The token exchange answers with two of the API key codes; the rest are core's to say.
+  const answerable = new Set<string>([
+    ...Object.keys(ERRORS),
+    ...Object.keys(AUTH_ERRORS),
+    'apikey.invalid',
+    'apikey.rate_limited',
+  ])
+  const coreOnly = new Set<string>([...Object.keys(CORE_ERRORS), ...Object.keys(APIKEY_ERRORS)])
   const strays: string[] = []
 
   for (const file of await shippedFiles()) {

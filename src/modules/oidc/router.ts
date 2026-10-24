@@ -12,9 +12,8 @@ import {
 } from 'tula-closeline-contract'
 import { AppError } from 'tula-closeline-kit'
 import type { Container } from '~/container'
-import { trustedProxyHops } from '~/env'
 import { DEFINITIONS, type ServiceErrorCode } from '~/errors'
-import { clientContext, noStore } from '~/http/client'
+import { clientContext, noStore, sourceOf } from '~/http/client'
 import { BODY_ERRORS, errorResponses } from '~/http/responses'
 import { createRouter } from '~/http/router'
 import type { AppEnv } from '~/http/types'
@@ -158,19 +157,6 @@ const options = createRoute({
     ...errorResponses(ownCodes(['server.internal', ...AUTH_OPTIONS_ROUTE.commonErrors])),
   },
 })
-
-/**
- * A request's source for the rate limits: the hop `TRUSTED_PROXY_HOPS` from the right of
- * `X-Forwarded-For`, which the proxies in front of this service wrote. Anything further left was
- * written by the client and is ignored. A header with fewer hops, or none, is the one shared
- * `unknown` bucket: nothing the client supplied is trusted.
- */
-function sourceOf(container: Container, c: Context<AppEnv>): string {
-  const hops = (c.req.header('x-forwarded-for') ?? '').split(',').map((hop) => hop.trim())
-  const depth = trustedProxyHops(container.env)
-  const client = hops.length >= depth ? hops[hops.length - depth] : undefined
-  return client === undefined || client === '' ? 'unknown' : client.slice(0, 64)
-}
 
 /** The first value of a query parameter as text, cut to a bounded length. */
 function param(c: Context<AppEnv>, name: string): string | undefined {

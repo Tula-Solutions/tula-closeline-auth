@@ -297,6 +297,39 @@
           "maxLength"
         ]
       },
+      "ApiKeyTokenResponse": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "description": "Send as `Authorization: Bearer <token>`."
+          },
+          "accessTokenExpiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "About 10 minutes from now."
+          }
+        },
+        "required": [
+          "accessToken",
+          "accessTokenExpiresAt"
+        ]
+      },
+      "ApiKeyTokenRequest": {
+        "type": "object",
+        "properties": {
+          "apiKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "description": "The API key secret, shown once when the key was created (`clk_` and 43 characters)."
+          }
+        },
+        "required": [
+          "apiKey"
+        ],
+        "additionalProperties": false
+      },
       "RefreshRequest": {
         "type": "object",
         "properties": {
@@ -4128,6 +4161,10 @@
                             "role"
                           ],
                           "additionalProperties": false
+                        },
+                        "userId": {
+                          "type": "string",
+                          "pattern": "^usr_[0-9a-f]{32}$"
                         }
                       },
                       "required": [
@@ -4795,6 +4832,373 @@
                       "error": {
                         "code": "server.unavailable",
                         "message": "The service is temporarily unavailable."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/token": {
+      "post": {
+        "tags": [
+          "api-key"
+        ],
+        "summary": "Exchange an API key for an access token",
+        "description": "Verifies the key with core and returns an access token of 10 minutes for the key's Organization and scopes (no role, no refresh token). Exchange again when it expires. A revoked key stops working at the next exchange. An unknown, malformed, revoked or expired key all answer `apikey.invalid`. Failed attempts are counted per source.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApiKeyTokenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyTokenResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`request.invalid`: The request is not valid.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "request.invalid": {
+                    "value": {
+                      "error": {
+                        "code": "request.invalid",
+                        "message": "The request is not valid."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`apikey.invalid`: The API key is not valid.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "apikey.invalid": {
+                    "value": {
+                      "error": {
+                        "code": "apikey.invalid",
+                        "message": "The API key is not valid."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`request.too_large`: The request body is too large.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "request.too_large": {
+                    "value": {
+                      "error": {
+                        "code": "request.too_large",
+                        "message": "The request body is too large."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`request.unsupported_media_type`: The request content type is not supported.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "request.unsupported_media_type": {
+                    "value": {
+                      "error": {
+                        "code": "request.unsupported_media_type",
+                        "message": "The request content type is not supported."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`apikey.rate_limited`: This API key made too many requests. Try again later.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "apikey.rate_limited": {
+                    "value": {
+                      "error": {
+                        "code": "apikey.rate_limited",
+                        "message": "This API key made too many requests. Try again later."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`server.internal`: Something went wrong on our side.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "server.internal": {
+                    "value": {
+                      "error": {
+                        "code": "server.internal",
+                        "message": "Something went wrong on our side."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`membership.unavailable`: Organization membership is unavailable right now. Try again shortly.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "membership.unavailable": {
+                    "value": {
+                      "error": {
+                        "code": "membership.unavailable",
+                        "message": "Organization membership is unavailable right now. Try again shortly."
                       }
                     }
                   }
