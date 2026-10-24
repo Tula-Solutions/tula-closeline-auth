@@ -15,6 +15,7 @@ export function createPlaceholderMembership(): MembershipClaims {
     createOrganization: unavailable,
     acceptInvitation: unavailable,
     abandonOrganization: unavailable,
+    verifyApiKey: async (_secret, signal) => unavailable({ signal }),
     forUser: async (_userId, signal) => {
       signal?.throwIfAborted()
       return null

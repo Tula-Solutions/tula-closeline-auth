@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import { type Container, reportSafely } from '~/container'
+import { trustedProxyHops } from '~/env'
 import type { AppEnv } from '~/http/types'
 import { readDeviceCookie } from '~/modules/flow/device-cookie'
 import { CLIENT_HEADER, clientHeaderSchema } from '~/modules/flow/schema'
@@ -33,4 +34,17 @@ export function clientContext(container: Container, c: Context<AppEnv>): ClientC
         status,
       }),
   }
+}
+
+/**
+ * A request's source for the rate limits: the hop `TRUSTED_PROXY_HOPS` from the right of
+ * `X-Forwarded-For`, which the proxies in front of this service wrote. Anything further left was
+ * written by the client and is ignored. A header with fewer hops, or none, is the one shared
+ * `unknown` bucket: nothing the client supplied is trusted.
+ */
+export function sourceOf(container: Container, c: Context<AppEnv>): string {
+  const hops = (c.req.header('x-forwarded-for') ?? '').split(',').map((hop) => hop.trim())
+  const depth = trustedProxyHops(container.env)
+  const client = hops.length >= depth ? hops[hops.length - depth] : undefined
+  return client === undefined || client === '' ? 'unknown' : client.slice(0, 64)
 }

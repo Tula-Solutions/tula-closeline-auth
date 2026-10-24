@@ -1,5 +1,8 @@
 import {
   ABANDON_MAX_AGE_HOURS,
+  APIKEY_ERRORS,
+  type ApiKeyId,
+  type ApiKeyScope,
   CORE_ERRORS,
   type CoreErrorCode,
   ERRORS,
@@ -16,6 +19,7 @@ import {
   type OrganizationStatus,
   type Role,
   type UserId,
+  verifyApiKeyRequestSchema,
 } from 'tula-closeline-contract'
 
 /** One request the fake received. Headers are lower-cased. */
@@ -43,6 +47,13 @@ export type FakeCore = {
   requests: RecordedRequest[]
   /** An Invitation that accept calls honour for this (folded) address. */
   invite: (token: string, invitation: { email: string; role?: InvitableRole }) => void
+  /** Teach it an API key: its secret verifies as this key until revoked. Returns the key id. */
+  addApiKey: (
+    secret: string,
+    key: { organizationId: OrganizationId; scopes: ApiKeyScope[]; roleCeiling?: Role }
+  ) => ApiKeyId
+  /** Revoke a key: its secret now answers `apikey.revoked`. */
+  revokeApiKey: (secret: string) => void
   /** Set an Organization's status, which the lookups of its members report. */
   setStatus: (organizationId: string, status: OrganizationStatus) => void
   /** Answer every request 503 (`true`) or normally again (`false`). */
@@ -62,9 +73,15 @@ export type FakeCore = {
 }
 
 /** The error body core sends for a registry entry. */
-function coreError(code: CoreErrorCode | 'auth.unauthenticated' | 'request.invalid') {
+function coreError(
+  code: CoreErrorCode | 'auth.unauthenticated' | 'request.invalid' | keyof typeof APIKEY_ERRORS
+) {
   const definition =
-    code === 'auth.unauthenticated' || code === 'request.invalid' ? ERRORS[code] : CORE_ERRORS[code]
+    code === 'auth.unauthenticated' || code === 'request.invalid'
+      ? ERRORS[code]
+      : code in APIKEY_ERRORS
+        ? APIKEY_ERRORS[code as keyof typeof APIKEY_ERRORS]
+        : CORE_ERRORS[code as CoreErrorCode]
   return Response.json(
     { error: { code: definition.code, message: definition.message } },
     { status: definition.status }
@@ -113,6 +130,11 @@ export function startFakeCore(secret = 'fake-core-secret-0123456789abcdef-0123')
   let skewMs = 0
   const acceptedByKey = new Map<string, { organizationId: OrganizationId; role: Role }>()
   let broken = false
+  const apiKeys = new Map<
+    string,
+    { apiKeyId: ApiKeyId; organizationId: OrganizationId; scopes: ApiKeyScope[]; roleCeiling: Role }
+  >()
+  const revoked = new Set<string>()
 
   const handle = async (request: Request): Promise<Response> => {
     const path = new URL(request.url).pathname
@@ -200,6 +222,21 @@ export function startFakeCore(secret = 'fake-core-secret-0123456789abcdef-0123')
       return Response.json(membership)
     }
 
+    if (path === '/internal/api-keys/verify') {
+      const parsed = verifyApiKeyRequestSchema.safeParse(body)
+      if (!parsed.success) {
+        return coreError('apikey.invalid')
+      }
+      const found = apiKeys.get(parsed.data.secret)
+      if (!found) {
+        return coreError('apikey.invalid')
+      }
+      if (revoked.has(parsed.data.secret)) {
+        return coreError('apikey.revoked')
+      }
+      return Response.json({ ...found, expiresAt: null })
+    }
+
     if (path === '/internal/membership') {
       const parsed = internalMembershipRequestSchema.safeParse(body)
       if (!parsed.success) {
@@ -263,6 +300,12 @@ export function startFakeCore(secret = 'fake-core-secret-0123456789abcdef-0123')
         role: invitation.role ?? 'rep',
         organizationId: formatId('org', crypto.randomUUID()),
       }),
+    addApiKey: (secret, key) => {
+      const apiKeyId = formatId('akey', crypto.randomUUID())
+      apiKeys.set(secret, { apiKeyId, roleCeiling: 'rep', ...key })
+      return apiKeyId
+    },
+    revokeApiKey: (secret) => void revoked.add(secret),
     setStatus: (organizationId, status) => void statuses.set(organizationId, status),
     breakDown: (value) => {
       broken = value
