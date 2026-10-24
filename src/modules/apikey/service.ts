@@ -78,6 +78,8 @@ export async function exchange(
         error.retryAfterMs ?? DEFAULT_RETRY_AFTER_MS
       )
     }
+    // Core being down is not the caller's failure: do not let an outage lock a source out.
+    await deps.lockout.clear(lockKey)
     throw new MembershipOutage(error, error instanceof MembershipRejected)
   }
   const token = await sign(verified, deps.clock.now())

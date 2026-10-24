@@ -121,6 +121,16 @@ describe('POST /v1/token', () => {
     expect(await response.json()).toMatchObject({ error: { code: 'membership.unavailable' } })
   })
 
+  test('a core outage is not counted against the source', async () => {
+    const { deps, exchange } = await setup()
+    deps.membership.breakDown(true)
+    for (let i = 0; i < 30; i += 1) {
+      expect((await exchange(SECRET, '198.51.100.9')).status).toBe(503)
+    }
+    deps.membership.breakDown(false)
+    expect((await exchange(SECRET, '198.51.100.9')).status).toBe(200)
+  })
+
   test('failures are counted per source: one source is slowed, another is not', async () => {
     const { deps, exchange } = await setup()
     const bad = `clk_${'b'.repeat(43)}`
