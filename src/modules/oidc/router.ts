@@ -92,7 +92,7 @@ const callback = createRoute({
   responses: {
     302: {
       description:
-        'Every outcome but `oidc.disabled`. Success: to `returnTo`, with the refresh cookie. A new person: to `/sign-up/google?attempt=<id>`. A failure: to `/sign-in?error=<code>`.',
+        'Every outcome but `oidc.disabled`. Success: to `returnTo`, with the refresh cookie. A new person: to `/sign-up/google?attempt=<id>`. A failure: to `/sign-in?error=<code>`, including `request.invalid` when `X-Forwarded-For` has fewer hops than `TRUSTED_PROXY_HOPS`.',
       headers: z.object({
         location: z.string(),
         'set-cookie': z.string().optional().openapi({
@@ -154,7 +154,9 @@ const options = createRoute({
       description: 'The providers.',
       content: { 'application/json': { schema: authOptionsResponseSchema } },
     },
-    ...errorResponses(ownCodes(['server.internal', ...AUTH_OPTIONS_ROUTE.commonErrors])),
+    ...errorResponses(
+      ownCodes(['request.invalid', 'server.internal', ...AUTH_OPTIONS_ROUTE.commonErrors])
+    ),
   },
 })
 

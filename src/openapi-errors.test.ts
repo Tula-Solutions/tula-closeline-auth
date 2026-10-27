@@ -73,6 +73,7 @@ const ROUTES: [method: string, path: string, codes: Record<string, string[]>][] 
     'get',
     '/v1/client/auth-options',
     {
+      '400': ['request.invalid'],
       '413': ['request.too_large'],
       '429': ['rate.limited'],
       '500': ['server.internal'],
