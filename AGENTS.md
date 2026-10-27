@@ -138,7 +138,7 @@ and `CORE_INTERNAL_TOKEN` (32+ characters, never logged) (all five required outs
 comma-separated, https outside `local`, no wildcard; required outside `local`),
 `SESSION_COOKIE_INSECURE` (`true` only in `local`), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
 (never logged) and `GOOGLE_REDIRECT_URI` (all three or none; none means Google is off and the
-routes answer `oidc.disabled`), `GOOGLE_ISSUER_URL` (`local` only, the fake provider), `TRUSTED_PROXY_HOPS` (1 to 10, default 1 in `local`, required elsewhere: how many proxies append to `X-Forwarded-For`, the edge plus the portal proxy in production; the per-source limits of the Google routes take the client from that many hops from the right and share one `unknown` bucket when the header is shorter), `COUNTER_HASH_KEY` and `DEVICE_COOKIE_KEY` (32 to
+routes answer `oidc.disabled`), `GOOGLE_ISSUER_URL` (`local` only, the fake provider), `TRUSTED_PROXY_HOPS` (1 to 10, default 1 in `local`, required elsewhere: how many proxies append to `X-Forwarded-For`, the edge plus the portal proxy in production; the per-source limits of the Google routes take the client from that many hops from the right and refuse a request with `request.invalid` (logged once) when the header is shorter, except in `local`, which shares one bucket), `COUNTER_HASH_KEY` and `DEVICE_COOKIE_KEY` (32 to
 512 printable characters each, different, required outside `local`, never logged; rotation:
 `.claude/rules/lockout.md`). Add a key in both files.
 
@@ -158,10 +158,11 @@ scenarios against real Postgres as the `closeline_auth` role (`POSTGRES_PORT` mo
   (ADR 0014). Counters are in Postgres, shared by every instance: `.claude/rules/lockout.md`.
 - No production mail provider (hub issue #35): the mailer fails with `mail.unavailable`. Only in
   `local`, `MAIL_LOCAL_URL` selects a Mailpit mailbox adapter: `.claude/rules/mail.md`.
-- **Deployment prerequisite: a per-source rate limit at the edge.** The service has no per-IP
-  limit on sign-up and sign-in starts (it needs a trusted-proxy decision), so it must not be
-  exposed to the internet until the edge (load balancer or WAF) limits requests per source;
-  without one a single source can fill the limiters below and shed everyone else. Inside the
+- **Deployment prerequisite: a per-source rate limit at the edge.** Sign-up and sign-in starts are
+  limited to 30 a minute per source (`Flow.limitStart`, the source from `TRUSTED_PROXY_HOPS`), which
+  is a floor, not a defence: the service must not be exposed to the internet until the edge (load
+  balancer or WAF) limits requests per source too; without one a single source can still fill the
+  limiters below and shed everyone else. Inside the
   service: a sign-up checks the password policy (local), takes a hash slot, and inside it counts
   the send against the per-address cooldown and hourly cap, and only then does the breach lookup
   and the argon2id hash, so an address over its cap costs neither (a password the breach list

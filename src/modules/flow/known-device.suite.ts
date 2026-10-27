@@ -42,10 +42,14 @@ export function describeKnownDevices(name: string, setup: () => Promise<KnownDev
       const prefix = Bun.randomUUIDv7().slice(-12)
 
       /** A new account, signed in once from a browser so that device is known. */
+      // Every start comes from a source of its own, so the per-source start limit never applies.
+      let sources = 0
+      const source = () => ({ 'x-forwarded-for': `src-${prefix}-${++sources}` })
       async function account(label: string) {
         const email = `${label}${++counter}.${prefix}@northline.app`
         const started = await call(first, 'POST', '/v1/client/sign-ups', {
           client: 'browser',
+          headers: source(),
           body: { email, password: PASSWORD, organizationName: 'Northline' },
         })
         await call(first, 'POST', `/v1/client/sign-ups/${text(started.body, 'id')}/verify-email`, {
@@ -67,7 +71,7 @@ export function describeKnownDevices(name: string, setup: () => Promise<KnownDev
         const started = await call(app, 'POST', '/v1/client/sign-ins', {
           client: 'browser',
           body: { identifier: email },
-          headers,
+          headers: { ...headers, ...source() },
         })
         return call(app, 'POST', `/v1/client/sign-ins/${text(started.body, 'id')}/password`, {
           client: 'browser',

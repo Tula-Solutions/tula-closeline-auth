@@ -29,7 +29,8 @@ async function setup(options: { env?: Record<string, string> } = {}) {
     returnTo?: string
   ): Promise<Begun> {
     const reply = await call(app, 'POST', '/v1/client/google/start', {
-      headers: { origin: ORIGIN },
+      // Outside local a request must name its source, as the proxy in front would.
+      headers: { origin: ORIGIN, 'x-forwarded-for': '203.0.113.50' },
       body: { intent, ...(returnTo === undefined ? {} : { returnTo }) },
     })
     const line = reply.headers.getSetCookie().find((entry) => entry.startsWith(`${cookieName}=`))
@@ -283,14 +284,24 @@ describe('start', () => {
       expect((await startFrom(app, '203.0.113.2, 198.51.100.1')).status).toBe(200)
     })
 
-    test('a header with fewer hops than trusted, or none, shares one bucket', async () => {
+    test('outside local, a header with fewer hops than trusted, or none, is refused and logged once', async () => {
+      const { app, deps } = await setup({ env: { ENVIRONMENT: 'dev', TRUSTED_PROXY_HOPS: '2' } })
+
+      for (const forwarded of [undefined, '1.2.3.4', undefined]) {
+        const reply = await startFrom(app, forwarded)
+        expect(reply.status).toBe(400)
+        expect(reply.body).toMatchObject({ error: { code: 'request.invalid' } })
+      }
+      expect(deps.logLines.filter((line) => line.includes('X-Forwarded-For'))).toHaveLength(1)
+      expect((await startFrom(app, '203.0.113.2, 198.51.100.1')).status).toBe(200)
+    })
+
+    test('in local, a header with fewer hops than trusted, or none, shares one bucket', async () => {
       const { app } = await setup({ env: { TRUSTED_PROXY_HOPS: '2' } })
 
       const blocked = await exhaust(app, (n) => (n % 2 === 0 ? undefined : `10.0.0.${n}`))
 
       expect(blocked?.status).toBe(429)
-      expect((await startFrom(app)).status).toBe(429)
-      expect((await startFrom(app, '1.2.3.4')).status).toBe(429)
       expect((await startFrom(app, '203.0.113.2, 198.51.100.1')).status).toBe(200)
     })
 

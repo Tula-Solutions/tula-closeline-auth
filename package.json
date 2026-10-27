@@ -4,7 +4,7 @@
   "description": "Closeline auth service: sign-in, sessions and tokens, copied from tula-auth",
   "private": true,
   "type": "module",
-  "packageManager": "bun@1.4.2",
+  "packageManager": "bun@1.4.3",
   "scripts": {
     "prepare": "husky || true",
     "dev": "bun --watch src/server.ts",

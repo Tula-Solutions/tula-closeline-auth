@@ -17,8 +17,8 @@ const PROXY_VARIABLES = [
 type ProxyVariable = (typeof PROXY_VARIABLES)[number]
 
 /**
- * Whether Bun 1.4.2's `fetch` is known to honour the variable for an `http:` URL. The kit's probe
- * (`src/http/proxy.test.ts`) pins this: `ALL_PROXY` and the `https` pair are not read for it. The
+ * Whether Bun 1.4.3's `fetch` (the version CI pins) honours the variable for an `http:` URL:
+ * `ALL_PROXY` is read from 1.4.3 on (1.4.2 ignored it), the `https` pair is not read for it. The
  * control in the child is expected to reach the proxy exactly when this is true, so a Bun change
  * in either direction fails this test and is looked at, rather than silently making it blind.
  */
@@ -27,8 +27,8 @@ const FETCH_HONOURS: Record<ProxyVariable, boolean> = {
   http_proxy: true,
   HTTPS_PROXY: false,
   https_proxy: false,
-  ALL_PROXY: false,
-  all_proxy: false,
+  ALL_PROXY: true,
+  all_proxy: true,
 }
 
 type StandInProxy = { url: string; seen: string[]; stop: () => void }

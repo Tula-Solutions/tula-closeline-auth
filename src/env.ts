@@ -294,7 +294,7 @@ const schema = z
      * How many proxies in front of this service append to `X-Forwarded-For` (the edge plus the
      * portal's proxy, for instance): an integer from 1 to 10, default 1 in `local`; required elsewhere (boot fails without it). The per-source rate limits
      * take the client from that many hops from the right of the header, so a value the client
-     * wrote at the front is never used. A header with fewer hops (or none) shares one bucket.
+     * wrote at the front is never used. A header with fewer hops (or none) is refused with `request.invalid` outside `local`.
      */
     TRUSTED_PROXY_HOPS: z.coerce.number().int().min(1).max(10).optional(),
     /**

@@ -1,4 +1,4 @@
-import { MAX_JWKS_KEYS } from 'tula-closeline-kit'
+import { createStaticKeySet, MAX_JWKS_KEYS } from 'tula-closeline-kit'
 import type { Container } from '~/container'
 import { ACCESS_TOKEN_ALGORITHM, type Jwk, type Jwks } from '~/modules/jwks/schema'
 import type { Tenant } from '~/ports/fixed-project'
@@ -90,9 +90,10 @@ export async function ensureKeys(deps: KeyDeps, tenant: Tenant): Promise<void> {
   await deps.signingKeys.insert(tenant.environmentId, created)
 }
 
-// Imported private keys, by AAD and ciphertext: a hit means this exact binding already decrypted
-// successfully, so a ciphertext copied into another row still has to pass the AAD check.
-const privateKeys = new Map<string, Promise<CryptoKey>>()
+// The imported private key of each environment's active key, by AAD and ciphertext: a hit means
+// this exact binding already decrypted successfully, so a ciphertext copied into another row still
+// has to pass the AAD check. One entry per environment, so a rotated-out key is dropped.
+const privateKeys = new Map<string, { cacheKey: string; key: Promise<CryptoKey> }>()
 
 /**
  * The key to sign access tokens with, creating keys on first use.
@@ -117,8 +118,8 @@ export async function activeSigningKey(
   const { id, privateKeyCiphertext } = active
   const aad = ciphertextAad(id, tenant.environmentId)
   const cacheKey = `${aad}:${privateKeyCiphertext}`
-  let privateKey = privateKeys.get(cacheKey)
-  if (!privateKey) {
+  let privateKey = privateKeys.get(tenant.environmentId)?.key
+  if (privateKeys.get(tenant.environmentId)?.cacheKey !== cacheKey) {
     privateKey = deps.secretBox
       .open(SECRET_BOX_PURPOSE, privateKeyCiphertext, aad)
       .then((pkcs8) =>
@@ -126,10 +127,15 @@ export async function activeSigningKey(
           'sign',
         ])
       )
-    privateKeys.set(cacheKey, privateKey)
-    privateKey.catch(() => privateKeys.delete(cacheKey))
+    const entry = { cacheKey, key: privateKey }
+    privateKeys.set(tenant.environmentId, entry)
+    privateKey.catch(() => {
+      if (privateKeys.get(tenant.environmentId) === entry) {
+        privateKeys.delete(tenant.environmentId)
+      }
+    })
   }
-  return { kid: id, privateKey: await privateKey }
+  return { kid: id, privateKey: await (privateKey as Promise<CryptoKey>) }
 }
 
 /**
@@ -151,6 +157,22 @@ export async function publicKeySet(deps: KeyDeps, tenant: Tenant): Promise<Jwks>
     )
   }
   return { keys }
+}
+
+// The verifier's key set of each environment, rebuilt only when the published kids change. A kid's
+// public key never changes, so the kids identify the set.
+const keySets = new Map<string, { kids: string; set: ReturnType<typeof createStaticKeySet> }>()
+
+/** The key set a verifier checks tokens against, rebuilt only when the published keys change. */
+export async function verificationKeySet(deps: KeyDeps, tenant: Tenant) {
+  const jwks = await publicKeySet(deps, tenant)
+  const kids = jwks.keys.map((key) => key.kid).join(',')
+  let cached = keySets.get(tenant.environmentId)
+  if (cached?.kids !== kids) {
+    cached = { kids, set: createStaticKeySet(jwks) }
+    keySets.set(tenant.environmentId, cached)
+  }
+  return cached.set
 }
 
 /** Thrown by {@link rotate} while the next key is too new, or when a concurrent rotation won. */

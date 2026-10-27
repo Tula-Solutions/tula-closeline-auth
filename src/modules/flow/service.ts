@@ -193,6 +193,29 @@ async function load(
   return { attempt: attempt as FlowStepAttempt, state: stateSchema.parse(attempt.state) }
 }
 
+/** How many flows one source may start per minute; the first request over it gets 429. */
+const START_PER_SOURCE_PER_MINUTE = 30
+
+/**
+ * Counts one start of a sign-up or sign-in against its source's budget, before any work is done.
+ *
+ * @throws AppError `rate.limited` (429) with `details.retryAfter`.
+ */
+export async function limitStart(
+  deps: Pick<Container, 'rateLimiter'>,
+  route: 'sign_up' | 'sign_in',
+  source: string
+): Promise<void> {
+  const decision = await deps.rateLimiter.hit(
+    `flow_start_${route}:src:${source}`,
+    START_PER_SOURCE_PER_MINUTE,
+    durationToMs('1m')
+  )
+  if (!decision.allowed) {
+    throw rateLimited(ERRORS['rate.limited'], decision.retryAfterMs)
+  }
+}
+
 /** Starts a sign-up: checks the address and password, emails a code, creates nothing else. */
 export async function signUp(
   deps: Container,
