@@ -11,7 +11,7 @@ import * as Jwks from '~/modules/jwks/service'
 import * as Tokens from '~/modules/token/service'
 import { createReadyDeps } from '~/testing'
 import { at, call, emailedCode, text } from '~/testing/client'
-import { REUSE_GRACE_MS } from './service'
+import { REFRESH_TOKEN_PREFIX, REUSE_GRACE_MS } from './service'
 
 const PASSWORD = 'correct horse battery'
 
@@ -98,6 +98,135 @@ describe('refreshing', () => {
     expect(retry.status).toBe(200)
     expect(text(retry.body, 'refreshToken')).toBe(text(first.body, 'refreshToken'))
     expect(text(retry.body, 'accessToken')).not.toBe('')
+  })
+
+  describe('random refresh tokens (ADR 0026)', () => {
+    const envOf = (deps: Awaited<ReturnType<typeof setup>>['deps']) =>
+      deps.tenant.current?.environmentId ?? ''
+    const rowOf = async (deps: Awaited<ReturnType<typeof setup>>['deps'], token: string) =>
+      (await deps.sessions.findToken(envOf(deps), sha256Hex(token)))?.token
+
+    test('a rotation seals the next token on the spent row, never in the clear', async () => {
+      const { deps, refresh, refreshToken } = await setup()
+      const next = text((await refresh(refreshToken)).body, 'refreshToken')
+
+      const spent = await rowOf(deps, refreshToken)
+
+      expect(spent?.sealedNextToken).toBeInstanceOf(Uint8Array)
+      expect(Buffer.from(spent?.sealedNextToken ?? []).toString('latin1')).not.toContain(
+        next.slice(REFRESH_TOKEN_PREFIX.length)
+      )
+      expect(await rowOf(deps, next)).toMatchObject({ sealedNextToken: null })
+    })
+
+    test('after the grace the sealed value is cleared to NULL and the token is reuse', async () => {
+      const { deps, refresh, refreshToken } = await setup()
+      await refresh(refreshToken)
+      deps.clock.advance(`${Math.ceil(REUSE_GRACE_MS / 1000) + 1}s`)
+
+      const replay = await refresh(refreshToken)
+
+      expect(replay.body).toMatchObject({ error: { code: 'session.reuse_detected' } })
+      expect((await rowOf(deps, refreshToken))?.sealedNextToken).toBeNull()
+    })
+
+    test('two sessions created at the same instant get unrelated tokens', async () => {
+      const { deps, signIn, refreshToken, sessionId } = await setup()
+      const other = await signIn()
+      const otherToken = text(other.body, 'session.refreshToken')
+
+      expect(otherToken).not.toBe(refreshToken)
+      expect(otherToken).toMatch(/^tula_rt_[A-Za-z0-9_-]{43}$/)
+      expect(refreshToken).toMatch(/^tula_rt_[A-Za-z0-9_-]{43}$/)
+      // No longer computable from the session id and the master key.
+      const derived = await deps.keyedHash.hmac('refresh-tokens', `session:${sessionId}`)
+      expect(refreshToken).not.toBe(`tula_rt_${derived}`)
+    })
+
+    test.each([
+      [
+        'a tampered sealed value',
+        (bytes: Uint8Array) => bytes.map((b, i) => (i === bytes.length - 3 ? b ^ 1 : b)),
+      ],
+      [
+        'a sealed value from another row',
+        (_: Uint8Array) =>
+          new TextEncoder().encode(
+            'v1.AAAAAAAAAAAAAAAA.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+          ),
+      ],
+    ])('%s fails closed as reuse, not as a 500', async (_name, damage) => {
+      const { deps, refresh, refreshToken } = await setup()
+      await refresh(refreshToken)
+      const real = deps.sessions.findToken.bind(deps.sessions)
+      deps.sessions.findToken = async (environmentId, hash) => {
+        const found = await real(environmentId, hash)
+        return found?.token.sealedNextToken
+          ? {
+              ...found,
+              token: { ...found.token, sealedNextToken: damage(found.token.sealedNextToken) },
+            }
+          : found
+      }
+
+      const replay = await refresh(refreshToken)
+
+      expect(replay.status).toBe(401)
+      expect(replay.body).toMatchObject({ error: { code: 'session.reuse_detected' } })
+    })
+
+    test('a sealed value moved to another row does not open', async () => {
+      const { deps, refresh, refreshToken } = await setup()
+      const second = text((await refresh(refreshToken)).body, 'refreshToken')
+      const stolen = (await rowOf(deps, refreshToken))?.sealedNextToken
+      expect(stolen).toBeInstanceOf(Uint8Array)
+      await refresh(second)
+      const real = deps.sessions.findToken.bind(deps.sessions)
+      deps.sessions.findToken = async (environmentId, hash) => {
+        const found = await real(environmentId, hash)
+        return found && hash === sha256Hex(second) && stolen
+          ? {
+              ...found,
+              token: { ...found.token, sealedNextToken: stolen, usedAt: deps.clock.now() },
+            }
+          : found
+      }
+
+      const replay = await refresh(second)
+
+      expect(replay.body).toMatchObject({ error: { code: 'session.reuse_detected' } })
+    })
+
+    test('a token derived before this change still refreshes, and rotates to a random one', async () => {
+      const { deps, refresh, sessionId } = await setup()
+      const environmentId = envOf(deps)
+      const session = await deps.sessions.findById(environmentId, sessionId)
+      if (!session) {
+        throw new Error('no session')
+      }
+      const legacyId = Bun.randomUUIDv7()
+      const derived = `tula_rt_${await deps.keyedHash.hmac('refresh-tokens', `session:${legacyId}`)}`
+      const { revokedAt: _r, revokeReason: _w, ...fresh } = session
+      await deps.sessions.create(
+        { ...fresh, id: legacyId },
+        {
+          id: Bun.randomUUIDv7(),
+          projectId: session.projectId,
+          environmentId,
+          sessionId: legacyId,
+          tokenHash: sha256Hex(derived),
+          parentId: null,
+          expiresAt: session.idleExpiresAt,
+          createdAt: session.createdAt,
+        }
+      )
+
+      const next = await refresh(derived)
+
+      expect(next.status).toBe(200)
+      expect(text(next.body, 'refreshToken')).toMatch(/^tula_rt_[A-Za-z0-9_-]{43}$/)
+      expect(text(next.body, 'sessionId')).toBe(legacyId)
+    })
   })
 
   test('a spent token after the grace period ends the whole session, newest token included', async () => {
