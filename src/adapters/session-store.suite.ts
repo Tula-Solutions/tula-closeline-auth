@@ -18,6 +18,7 @@ export interface SessionSuiteContext {
 
 const T0 = new Date('2026-01-01T00:00:00Z')
 const HOUR = 3_600_000
+const SEALED = new Uint8Array([1, 2, 3, 250, 0, 7])
 
 function session(tenant: SessionSuiteTenant, userId: string, createdAt = T0): NewSession {
   return {
@@ -95,6 +96,7 @@ export function sessionStoreSuite(name: string, setup: () => Promise<SessionSuit
         child,
         at,
         idleExpiresAt: new Date(at.getTime() + HOUR),
+        sealedNextToken: SEALED,
       })
 
       expect(rotated).toBe(true)
@@ -106,6 +108,55 @@ export function sessionStoreSuite(name: string, setup: () => Promise<SessionSuit
       expect(moved?.lastActiveAt).toEqual(at)
     })
 
+    test('rotation seals the next token on the spent row; only its own environment reads it', async () => {
+      const { s, root } = await start()
+      const at = new Date(T0.getTime() + 1_000)
+      await ctx.store.rotate(ctx.a.environmentId, {
+        parentId: root.id,
+        child: token(s, 'child-hash', root.id),
+        at,
+        idleExpiresAt: new Date(at.getTime() + HOUR),
+        sealedNextToken: SEALED,
+      })
+
+      const spent = await ctx.store.findTokenById(ctx.a.environmentId, root.id)
+
+      expect(Array.from(spent?.sealedNextToken ?? [])).toEqual(Array.from(SEALED))
+      expect(await ctx.store.findTokenById(ctx.b.environmentId, root.id)).toBeNull()
+      await ctx.store.clearSealedNextToken(ctx.b.environmentId, root.id)
+      expect(
+        (await ctx.store.findTokenById(ctx.a.environmentId, root.id))?.sealedNextToken
+      ).not.toBeNull()
+    })
+
+    test('clearing sets the sealed value to NULL, and the next rotation clears the one before it', async () => {
+      const { s, root } = await start()
+      const at = new Date(T0.getTime() + 1_000)
+      const rotation = (parentId: string, hash: string) => ({
+        parentId,
+        child: token(s, hash, parentId),
+        at,
+        idleExpiresAt: new Date(at.getTime() + HOUR),
+        sealedNextToken: SEALED,
+      })
+      const first = rotation(root.id, 'c1')
+      await ctx.store.rotate(ctx.a.environmentId, first)
+      await ctx.store.clearSealedNextToken(ctx.a.environmentId, root.id)
+      expect(
+        (await ctx.store.findTokenById(ctx.a.environmentId, root.id))?.sealedNextToken
+      ).toBeNull()
+
+      const second = rotation(first.child.id, 'c2')
+      await ctx.store.rotate(ctx.a.environmentId, second)
+      const third = rotation(second.child.id, 'c3')
+      await ctx.store.rotate(ctx.a.environmentId, third)
+
+      const middle = await ctx.store.findTokenById(ctx.a.environmentId, first.child.id)
+      const latest = await ctx.store.findTokenById(ctx.a.environmentId, second.child.id)
+      expect(middle?.sealedNextToken).toBeNull()
+      expect(latest?.sealedNextToken).not.toBeNull()
+    })
+
     test('of concurrent rotations of one token exactly one wins', async () => {
       const { s, root } = await start()
       const at = new Date(T0.getTime() + 1_000)
@@ -114,10 +165,10 @@ export function sessionStoreSuite(name: string, setup: () => Promise<SessionSuit
         Array.from({ length: 6 }, () =>
           ctx.store.rotate(ctx.a.environmentId, {
             parentId: root.id,
-            // Derived from the parent in the service, so every racer stores the same hash.
             child: token(s, 'same-child-hash', root.id),
             at,
             idleExpiresAt: new Date(at.getTime() + HOUR),
+            sealedNextToken: SEALED,
           })
         )
       )
@@ -133,6 +184,7 @@ export function sessionStoreSuite(name: string, setup: () => Promise<SessionSuit
         child: token(s, hash, parentId),
         at,
         idleExpiresAt: new Date(at.getTime() + HOUR),
+        sealedNextToken: SEALED,
       })
       const first = next('c1', root.id)
       expect(await ctx.store.rotate(ctx.a.environmentId, first)).toBe(true)

@@ -18,7 +18,7 @@ export class MemorySessionStore implements SessionStore {
   /** @inheritdoc */
   async create(session: NewSession, root: NewRefreshToken): Promise<void> {
     this.#sessions.set(session.id, { ...session, revokedAt: null, revokeReason: null })
-    this.#tokens.set(root.id, { ...root, replacedById: null, usedAt: null })
+    this.#tokens.set(root.id, { ...root, replacedById: null, usedAt: null, sealedNextToken: null })
   }
 
   /** @inheritdoc */
@@ -59,10 +59,28 @@ export class MemorySessionStore implements SessionStore {
     }
     parent.usedAt = rotation.at
     parent.replacedById = rotation.child.id
-    this.#tokens.set(rotation.child.id, { ...rotation.child, replacedById: null, usedAt: null })
+    parent.sealedNextToken = new Uint8Array(rotation.sealedNextToken)
+    const grandparent = parent.parentId ? this.#tokens.get(parent.parentId) : undefined
+    if (grandparent) {
+      grandparent.sealedNextToken = null
+    }
+    this.#tokens.set(rotation.child.id, {
+      ...rotation.child,
+      replacedById: null,
+      usedAt: null,
+      sealedNextToken: null,
+    })
     session.lastActiveAt = rotation.at
     session.idleExpiresAt = rotation.idleExpiresAt
     return true
+  }
+
+  /** @inheritdoc */
+  async clearSealedNextToken(environmentId: string, id: string): Promise<void> {
+    const token = this.#tokens.get(id)
+    if (token && token.environmentId === environmentId) {
+      token.sealedNextToken = null
+    }
   }
 
   /** @inheritdoc */

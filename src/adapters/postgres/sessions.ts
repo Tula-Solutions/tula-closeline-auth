@@ -42,6 +42,7 @@ const tokenColumns = {
   replacedById: refreshTokens.replacedById,
   usedAt: refreshTokens.usedAt,
   expiresAt: refreshTokens.expiresAt,
+  sealedNextToken: refreshTokens.sealedNextToken,
   createdAt: refreshTokens.createdAt,
 }
 
@@ -134,7 +135,7 @@ export class PostgresSessionStore implements SessionStore {
     try {
       await withEnvironment(this.db, environmentId, async (tx) => {
         const [parent] = await tx
-          .select({ sessionId: refreshTokens.sessionId })
+          .select({ sessionId: refreshTokens.sessionId, parentId: refreshTokens.parentId })
           .from(refreshTokens)
           .where(
             and(
@@ -180,20 +181,33 @@ export class PostgresSessionStore implements SessionStore {
         if (spent.length !== 1) {
           throw new LostRace()
         }
-        // The child's secret is derived from the parent, so racers insert the same hash: the
-        // loser fails the unique key above and rolls back, like any other lost race.
         await tx
           .insert(refreshTokens)
           .values({ ...rotation.child, updatedAt: rotation.child.createdAt })
         await tx
           .update(refreshTokens)
-          .set({ replacedById: rotation.child.id })
+          .set({
+            replacedById: rotation.child.id,
+            sealedNextToken: Buffer.from(rotation.sealedNextToken),
+          })
           .where(
             and(
               eq(refreshTokens.id, rotation.parentId),
               eq(refreshTokens.environmentId, environmentId)
             )
           )
+        if (parent.parentId) {
+          // The token before this one can now only be replayed as reuse: drop its sealed copy.
+          await tx
+            .update(refreshTokens)
+            .set({ sealedNextToken: null })
+            .where(
+              and(
+                eq(refreshTokens.id, parent.parentId),
+                eq(refreshTokens.environmentId, environmentId)
+              )
+            )
+        }
       })
       return true
     } catch (error) {
@@ -202,6 +216,16 @@ export class PostgresSessionStore implements SessionStore {
       }
       throw error
     }
+  }
+
+  /** @inheritdoc */
+  async clearSealedNextToken(environmentId: string, id: string): Promise<void> {
+    await withEnvironment(this.db, environmentId, (tx) =>
+      tx
+        .update(refreshTokens)
+        .set({ sealedNextToken: null })
+        .where(and(eq(refreshTokens.id, id), eq(refreshTokens.environmentId, environmentId)))
+    )
   }
 
   /** @inheritdoc */

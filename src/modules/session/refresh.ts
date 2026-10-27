@@ -7,15 +7,17 @@ import * as Tokens from '~/modules/token/service'
 import type { Tenant } from '~/ports/fixed-project'
 import type { SessionPosition, SessionRecord } from '~/ports/session-store'
 import {
-  deriveToken,
   type IssuedSession,
   idleExpiry,
   issued,
   MAX_REFRESH_TOKEN_LENGTH,
+  newRefreshToken,
   REFRESH_TOKEN_PREFIX,
   REUSE_GRACE_MS,
   rejectEnded,
   type SessionDeps,
+  sealNext,
+  unsealNext,
 } from './service'
 
 /** Whether a string could be a refresh token this service issued (cheap, before any lookup). */
@@ -102,21 +104,24 @@ export async function refresh(
 
     // Everything that needs no answer from core is decided first, so a replayed or expired token
     // costs no call, and an outage can never defer reuse detection.
-    let replay = false
+    let replay: string | null = null
     if (token.usedAt !== null) {
       const withinGrace = checkedAt.getTime() - token.usedAt.getTime() < REUSE_GRACE_MS
       const child =
         withinGrace && token.replacedById
           ? await deps.sessions.findTokenById(tenant.environmentId, token.replacedById)
           : null
-      if (!child || child.usedAt !== null) {
+      // The sealed next token is the answer to a replay; it must open, and be the child's token.
+      const next = child && child.usedAt === null ? await unsealNext(deps, token, child) : null
+      if (next === null) {
+        await deps.sessions.clearSealedNextToken(tenant.environmentId, token.id)
         await deps.sessions.revoke(tenant.environmentId, session.id, 'reuse_detected', checkedAt)
         deps.logger.warn('refresh token reuse detected; session revoked', {
           sessionId: session.id,
         })
         throw fail(AUTH_ERRORS['session.reuse_detected'])
       }
-      replay = true
+      replay = next
     } else if (token.expiresAt.getTime() <= checkedAt.getTime()) {
       throw fail(AUTH_ERRORS['session.expired'])
     }
@@ -155,7 +160,7 @@ export async function refresh(
     // rotation time (which starts the grace window) are when they happen, not when we began.
     const now = deps.clock.now()
 
-    if (replay) {
+    if (replay !== null) {
       // Core may have taken seconds: what was true before the call may not be now, so the
       // session, the user and the next token are read again before the same next token is
       // handed out (a lost race that already waited on core in this request needs no re-read).
@@ -164,13 +169,7 @@ export async function refresh(
       }
       // The first response may have been lost: the same next token is returned.
       const access = await sign(tokenSession, membership, now)
-      return issued(
-        session.id,
-        access,
-        await deriveToken(deps, { parentId: token.id }),
-        membership,
-        session.absoluteExpiresAt
-      )
+      return issued(session.id, access, replay, membership, session.absoluteExpiresAt)
     }
 
     // The token and the session may have run out while core was being asked; the rotation's
@@ -181,7 +180,7 @@ export async function refresh(
     }
 
     const idleExpiresAt = idleExpiry(now, session.absoluteExpiresAt)
-    const child = await deriveToken(deps, { parentId: token.id })
+    const child = newRefreshToken()
     const rotated = await deps.sessions.rotate(tenant.environmentId, {
       parentId: token.id,
       child: {
@@ -196,6 +195,7 @@ export async function refresh(
       },
       at: now,
       idleExpiresAt,
+      sealedNextToken: await sealNext(deps, token.id, child),
     })
     if (rotated) {
       return issued(

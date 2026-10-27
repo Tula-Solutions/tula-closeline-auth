@@ -80,7 +80,7 @@ describe('the browser client type sets the refresh token in a cookie', () => {
     expect(cookies[0]).toBe(
       `${NAME}=${tokenOf(done.headers)}; Path=${PATH}; Max-Age=${ABSOLUTE_SECONDS}; HttpOnly; Secure; SameSite=Strict`
     )
-    expect(tokenOf(done.headers)).toMatch(/^tula_rt_[0-9a-f]{64}$/)
+    expect(tokenOf(done.headers)).toMatch(/^tula_rt_[A-Za-z0-9_-]{43}$/)
     expect(cookies[0]).not.toContain('Domain')
     expect(done.headers.get('cache-control')).toBe('no-store')
     expect(at(done.body, 'session.refreshToken')).toBeUndefined()

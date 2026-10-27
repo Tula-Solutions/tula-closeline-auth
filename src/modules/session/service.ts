@@ -1,21 +1,25 @@
 import { decodeJwt } from 'jose'
 import { AUTH_ERRORS, ERRORS, formatId, type Role } from 'tula-closeline-contract'
+import { REFRESH_SEALED_NEXT_TOKEN_MAX_BYTES } from 'tula-closeline-db/schema'
 import { createTokenVerifier, TokenVerificationError, type VerifiedToken } from 'tula-closeline-kit'
 import type { Container } from '~/container'
 import { publicUrl } from '~/env'
 import { fail } from '~/errors'
-import { sha256Hex } from '~/lib/crypto'
+import { randomToken, sha256Hex, timingSafeEqual } from '~/lib/crypto'
 import { durationToMs } from '~/lib/duration'
 import * as Jwks from '~/modules/jwks/service'
 import type * as Tokens from '~/modules/token/service'
 import type { Tenant } from '~/ports/fixed-project'
 import type { Membership as MembershipClaim } from '~/ports/membership'
-import { isActive, type SessionClient, type SessionRecord } from '~/ports/session-store'
+import {
+  isActive,
+  type RefreshTokenRecord,
+  type SessionClient,
+  type SessionRecord,
+} from '~/ports/session-store'
 
 /** Prefix of a refresh token, so it can be recognised in a log scan or a secret scanner. */
 export const REFRESH_TOKEN_PREFIX = 'tula_rt_'
-/** Purpose string for the keyed hash that derives refresh tokens. */
-export const KEYED_HASH_PURPOSE = 'refresh-tokens'
 /** A session ends after this long without a refresh. */
 export const IDLE_TIMEOUT = '7d'
 /** A session ends this long after sign-in, whatever its activity. */
@@ -31,7 +35,6 @@ export type SessionDeps = Pick<
   | 'env'
   | 'clock'
   | 'ids'
-  | 'keyedHash'
   | 'sessions'
   | 'users'
   | 'membership'
@@ -72,13 +75,52 @@ export function browserBodyOf(session: IssuedSession) {
   }
 }
 
-/** Derives a refresh token from the session or from the token it replaces (never stored). */
-export async function deriveToken(
-  deps: Pick<Container, 'keyedHash'>,
-  source: { parentId: string } | { sessionId: string }
-): Promise<string> {
-  const message = 'parentId' in source ? `parent:${source.parentId}` : `session:${source.sessionId}`
-  return `${REFRESH_TOKEN_PREFIX}${await deps.keyedHash.hmac(KEYED_HASH_PURPOSE, message)}`
+/** Purpose label of the key that seals a refresh token's successor on the spent row. */
+export const SEAL_PURPOSE = 'refresh-next-tokens'
+
+/** A new refresh token: 32 random bytes, base64url, behind the prefix (ADR 0026). */
+export function newRefreshToken(): string {
+  return `${REFRESH_TOKEN_PREFIX}${randomToken(32)}`
+}
+
+/** Seals `next` for the spent row `parentId` (AES-256-GCM, the row id as associated data). */
+export async function sealNext(
+  deps: Pick<Container, 'secretBox'>,
+  parentId: string,
+  next: string
+): Promise<Uint8Array> {
+  const sealed = Buffer.from(
+    await deps.secretBox.seal(SEAL_PURPOSE, new TextEncoder().encode(next), parentId)
+  )
+  if (sealed.byteLength > REFRESH_SEALED_NEXT_TOKEN_MAX_BYTES) {
+    throw new Error('sealed refresh token exceeds the column limit')
+  }
+  return sealed
+}
+
+/**
+ * Opens the next token sealed on a spent row. `null` when there is none, it does not open (wrong
+ * key, row or altered bytes) or it is not the stored child's token: all read as reuse.
+ */
+export async function unsealNext(
+  deps: Pick<Container, 'secretBox'>,
+  spent: RefreshTokenRecord,
+  child: RefreshTokenRecord
+): Promise<string | null> {
+  if (spent.sealedNextToken === null) {
+    return null
+  }
+  try {
+    const plain = await deps.secretBox.open(
+      SEAL_PURPOSE,
+      Buffer.from(spent.sealedNextToken).toString('utf8'),
+      spent.id
+    )
+    const next = new TextDecoder('utf-8', { fatal: true }).decode(plain)
+    return timingSafeEqual(sha256Hex(next), child.tokenHash) ? next : null
+  } catch {
+    return null
+  }
 }
 
 /** The idle expiry after activity at `now`, never past the absolute one. */
@@ -124,7 +166,7 @@ export async function create(
   const absoluteExpiresAt = new Date(now.getTime() + durationToMs(ABSOLUTE_TIMEOUT))
   const idleExpiresAt = idleExpiry(now, absoluteExpiresAt)
   const sessionId = deps.ids.next()
-  const refreshToken = await deriveToken(deps, { sessionId })
+  const refreshToken = newRefreshToken()
   const access = await input.sign(
     { id: sessionId, userId: input.userId, authenticatedAt: now, authMethods: input.authMethods },
     input.membership,

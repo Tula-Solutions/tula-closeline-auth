@@ -37,6 +37,11 @@ export interface RefreshTokenRecord {
   replacedById: string | null
   usedAt: Date | null
   expiresAt: Date
+  /**
+   * The token that replaced this one, sealed for the reuse grace; `null` before rotation and
+   * once the grace is over. Opaque here: only the session service seals and opens it.
+   */
+  sealedNextToken: Uint8Array | null
   createdAt: Date
 }
 
@@ -44,7 +49,10 @@ export interface RefreshTokenRecord {
 export type NewSession = Omit<SessionRecord, 'revokedAt' | 'revokeReason'>
 
 /** A refresh token to store. */
-export type NewRefreshToken = Omit<RefreshTokenRecord, 'replacedById' | 'usedAt'>
+export type NewRefreshToken = Omit<
+  RefreshTokenRecord,
+  'replacedById' | 'usedAt' | 'sealedNextToken'
+>
 
 /** One rotation: the parent token is spent and its child stored in one step. */
 export interface Rotation {
@@ -52,6 +60,8 @@ export interface Rotation {
   child: NewRefreshToken
   at: Date
   idleExpiresAt: Date
+  /** The child's token sealed for the parent's row (see {@link RefreshTokenRecord}). */
+  sealedNextToken: Uint8Array
 }
 
 /** Where a page of sessions starts: after this one in newest-first order. */
@@ -80,10 +90,16 @@ export interface SessionStore {
   /**
    * Spends a refresh token and stores its child, and moves the session's idle expiry.
    *
+   * Also clears the sealed value of the parent's own parent: once a token is spent, the one
+   * before it can only be replayed as reuse.
+   *
    * @returns `false`, changing nothing, when the token was already spent (a concurrent refresh
    *   won) or the session was revoked.
    */
   rotate(environmentId: string, rotation: Rotation): Promise<boolean>
+
+  /** Sets a token's sealed next token to NULL (the reuse grace is over). Idempotent. */
+  clearSealedNextToken(environmentId: string, id: string): Promise<void>
 
   /**
    * Ends a session; every refresh token of it stops working at once.
