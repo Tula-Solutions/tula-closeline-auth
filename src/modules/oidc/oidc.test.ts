@@ -296,12 +296,16 @@ describe('start', () => {
       expect((await startFrom(app, '203.0.113.2, 198.51.100.1')).status).toBe(200)
     })
 
-    test('outside local, auth-options and the callback refuse a request with no header', async () => {
+    test('outside local, auth-options refuses a request with no header', async () => {
       const { app } = await setup({ env: { ENVIRONMENT: 'dev' } })
 
       const options = await call(app, 'GET', '/v1/client/auth-options')
       expect(options.status).toBe(400)
       expect(options.body).toMatchObject({ error: { code: 'request.invalid' } })
+    })
+
+    test('outside local, the callback redirects a request with no header to sign-in', async () => {
+      const { app } = await setup({ env: { ENVIRONMENT: 'dev' } })
 
       const back = await call(app, 'GET', `${CALLBACK}?code=abc&state=xyz`)
       expect(back.status).toBe(302)
