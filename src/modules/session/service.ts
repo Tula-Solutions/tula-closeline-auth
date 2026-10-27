@@ -1,11 +1,6 @@
 import { decodeJwt } from 'jose'
 import { AUTH_ERRORS, ERRORS, formatId, type Role } from 'tula-closeline-contract'
-import {
-  createStaticKeySet,
-  createTokenVerifier,
-  TokenVerificationError,
-  type VerifiedToken,
-} from 'tula-closeline-kit'
+import { createTokenVerifier, TokenVerificationError, type VerifiedToken } from 'tula-closeline-kit'
 import type { Container } from '~/container'
 import { publicUrl } from '~/env'
 import { fail } from '~/errors'
@@ -201,7 +196,7 @@ export async function authenticate(
   const verifier = createTokenVerifier({
     issuer: publicUrl(deps.env),
     audience: deps.env.TOKEN_AUDIENCE,
-    keys: await createStaticKeySet(await Jwks.publicKeySet(deps, tenant)),
+    keys: await Jwks.verificationKeySet(deps, tenant),
     clock: deps.clock,
   })
   let token: VerifiedToken

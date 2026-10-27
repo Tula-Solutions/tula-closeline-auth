@@ -175,3 +175,49 @@ describe('what signing reads', () => {
     expect(reads).toEqual({ list: 0, active: 1, recordsRead: 1 })
   })
 })
+
+describe('what is kept in memory', () => {
+  test('the verification key set is built once per change of the published keys', async () => {
+    const { deps, tenant } = await setup()
+    const first = await Jwks.verificationKeySet(deps, tenant)
+
+    expect(await Jwks.verificationKeySet(deps, tenant)).toBe(first)
+
+    await Jwks.ensureKeys(deps, tenant)
+    deps.clock.advance('10m')
+    await Jwks.rotate(deps, tenant)
+
+    expect(await Jwks.verificationKeySet(deps, tenant)).not.toBe(first)
+  })
+
+  test('only the active signing key stays decrypted: a key that is no longer active is opened again', async () => {
+    const { deps, tenant } = await setup()
+    let opened = 0
+    const open = deps.secretBox.open.bind(deps.secretBox)
+    deps.secretBox = {
+      ...deps.secretBox,
+      open: (...args: Parameters<typeof open>) => {
+        opened += 1
+        return open(...args)
+      },
+    }
+    await Jwks.ensureKeys(deps, tenant)
+    const oldActive = await deps.signingKeys.active(tenant.environmentId)
+    await Jwks.activeSigningKey(deps, tenant)
+    await Jwks.activeSigningKey(deps, tenant)
+    expect(opened).toBe(1)
+    deps.clock.advance('10m')
+    await Jwks.rotate(deps, tenant)
+    await Jwks.activeSigningKey(deps, tenant)
+    expect(opened).toBe(2)
+
+    // Were the old key active again, its cached copy would be gone.
+    const store = deps.signingKeys
+    deps.signingKeys = Object.assign(Object.create(store), {
+      active: async () => oldActive,
+    }) as SigningKeyStore
+    await Jwks.activeSigningKey(deps, tenant)
+
+    expect(opened).toBe(3)
+  })
+})
