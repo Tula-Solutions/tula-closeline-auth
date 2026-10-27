@@ -138,7 +138,7 @@ and `CORE_INTERNAL_TOKEN` (32+ characters, never logged) (all five required outs
 comma-separated, https outside `local`, no wildcard; required outside `local`),
 `SESSION_COOKIE_INSECURE` (`true` only in `local`), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
 (never logged) and `GOOGLE_REDIRECT_URI` (all three or none; none means Google is off and the
-routes answer `oidc.disabled`), `GOOGLE_ISSUER_URL` (`local` only, the fake provider), `TRUSTED_PROXY_HOPS` (1 to 10, default 1 in `local`, required elsewhere: how many proxies append to `X-Forwarded-For`, the edge plus the portal proxy in production; the per-source limits of the Google routes take the client from that many hops from the right and share one `unknown` bucket when the header is shorter), `COUNTER_HASH_KEY` and `DEVICE_COOKIE_KEY` (32 to
+routes answer `oidc.disabled`), `GOOGLE_ISSUER_URL` (`local` only, the fake provider), `TRUSTED_PROXY_HOPS` (1 to 10, default 1 in `local`, required elsewhere: how many proxies append to `X-Forwarded-For`, the edge plus the portal proxy in production; the per-source limits of the Google routes take the client from that many hops from the right and refuse a request with `request.invalid` (logged once) when the header is shorter, except in `local`, which shares one bucket), `COUNTER_HASH_KEY` and `DEVICE_COOKIE_KEY` (32 to
 512 printable characters each, different, required outside `local`, never logged; rotation:
 `.claude/rules/lockout.md`). Add a key in both files.
 

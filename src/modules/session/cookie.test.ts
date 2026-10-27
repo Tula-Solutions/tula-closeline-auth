@@ -33,6 +33,8 @@ async function setup(options: Options = {}) {
   const email = 'maya@northline.app'
   const started = await call(app, 'POST', '/v1/client/sign-ups', {
     client: 'browser',
+    // Outside local a request must name its source, as the proxy in front would.
+    headers: { 'x-forwarded-for': '203.0.113.5' },
     body: { email, password: PASSWORD, organizationName: 'Northline' },
   })
   const done = await call(
