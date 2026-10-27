@@ -158,10 +158,11 @@ scenarios against real Postgres as the `closeline_auth` role (`POSTGRES_PORT` mo
   (ADR 0014). Counters are in Postgres, shared by every instance: `.claude/rules/lockout.md`.
 - No production mail provider (hub issue #35): the mailer fails with `mail.unavailable`. Only in
   `local`, `MAIL_LOCAL_URL` selects a Mailpit mailbox adapter: `.claude/rules/mail.md`.
-- **Deployment prerequisite: a per-source rate limit at the edge.** The service has no per-IP
-  limit on sign-up and sign-in starts (it needs a trusted-proxy decision), so it must not be
-  exposed to the internet until the edge (load balancer or WAF) limits requests per source;
-  without one a single source can fill the limiters below and shed everyone else. Inside the
+- **Deployment prerequisite: a per-source rate limit at the edge.** Sign-up and sign-in starts are
+  limited to 30 a minute per source (`Flow.limitStart`, the source from `TRUSTED_PROXY_HOPS`), which
+  is a floor, not a defence: the service must not be exposed to the internet until the edge (load
+  balancer or WAF) limits requests per source too; without one a single source can still fill the
+  limiters below and shed everyone else. Inside the
   service: a sign-up checks the password policy (local), takes a hash slot, and inside it counts
   the send against the per-address cooldown and hourly cap, and only then does the breach lookup
   and the argon2id hash, so an address over its cap costs neither (a password the breach list

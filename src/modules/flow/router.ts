@@ -1,7 +1,7 @@
 import { createRoute, type OpenAPIHono, z } from '@hono/zod-openapi'
 import type { Context } from 'hono'
 import type { Container } from '~/container'
-import { clientContext, noStore } from '~/http/client'
+import { clientContext, noStore, sourceOf } from '~/http/client'
 import { BODY_ERRORS, errorResponses } from '~/http/responses'
 import { createRouter } from '~/http/router'
 import type { AppEnv } from '~/http/types'
@@ -96,6 +96,7 @@ const signUp = createRoute({
       'password.common',
       'password.breached',
       'verification.too_many_attempts',
+      'rate.limited',
       'mail.unavailable',
       'server.unavailable',
       'server.internal',
@@ -155,7 +156,10 @@ const signIn = createRoute({
   summary: 'Start a sign-in',
   description: 'The answer is the same whether or not the address has an account.',
   request: { headers: startHeaders, body: json(signInRequestSchema) },
-  responses: { ...ok, ...errorResponses([...BODY_ERRORS, 'server.internal']) },
+  responses: {
+    ...ok,
+    ...errorResponses([...BODY_ERRORS, 'rate.limited', 'server.internal']),
+  },
 })
 
 const password = createRoute({
@@ -238,6 +242,7 @@ export function createFlowRouter(container: Container): OpenAPIHono<AppEnv> {
 
   router.openapi(signUp, async (c) => {
     noStore(c)
+    await Flow.limitStart(container, 'sign_up', sourceOf(container, c))
     return c.json(
       await Flow.signUp(container, tenant(), c.req.valid('json'), clientContext(container, c)),
       200
@@ -257,6 +262,7 @@ export function createFlowRouter(container: Container): OpenAPIHono<AppEnv> {
   })
   router.openapi(signIn, async (c) => {
     noStore(c)
+    await Flow.limitStart(container, 'sign_in', sourceOf(container, c))
     return c.json(
       await Flow.signIn(container, tenant(), c.req.valid('json'), clientContext(container, c)),
       200

@@ -749,6 +749,7 @@ describe('what a sign-up costs before it is allowed', () => {
     const replies = await Promise.all(
       Array.from({ length: 50 }, (_, n) =>
         call(app, 'POST', '/v1/client/sign-ups', {
+          headers: { 'x-forwarded-for': `203.0.113.${n}` },
           body: {
             email: `burst${n}@northline.app`,
             password: PASSWORD,
@@ -1481,8 +1482,9 @@ describe('what the per-process counters allow while they are full', () => {
 
     const reply = await signUp('newcomer@northline.app')
 
+    // The first bucket a start needs is its source's, and that is the one refused.
     expect(reply.status).toBe(429)
-    expect(reply.body).toMatchObject({ error: { code: 'verification.too_many_attempts' } })
+    expect(reply.body).toMatchObject({ error: { code: 'rate.limited' } })
   })
 })
 
@@ -1606,4 +1608,41 @@ describe('what core is told about the person (ADR 0015)', () => {
 
     expect(deps.logLines.join('\n')).not.toContain('a name could not be sent to core')
   })
+})
+
+describe('the per-source limit on starting a flow', () => {
+  const starts = [
+    [
+      'sign-ups',
+      (n: number) => ({
+        email: `maya${n}@northline.app`,
+        password: PASSWORD,
+        organizationName: 'Northline',
+      }),
+    ],
+    ['sign-ins', (n: number) => ({ identifier: `maya${n}@northline.app` })],
+  ] as const
+
+  test.each(starts)(
+    '%s: a source over its budget gets rate.limited, another does not',
+    async (path, body) => {
+      const { app } = await setup()
+      const startFrom = (source: string, n: number) =>
+        call(app, 'POST', `/v1/client/${path}`, {
+          client: 'ios',
+          headers: { 'x-forwarded-for': source },
+          body: body(n),
+        })
+
+      let last = await startFrom('203.0.113.9', 0)
+      for (let n = 1; n <= 30; n += 1) {
+        last = await startFrom('203.0.113.9', n)
+      }
+
+      expect(last.status).toBe(429)
+      expect(last.body).toMatchObject({ error: { code: 'rate.limited' } })
+      expect(Number(last.headers.get('retry-after'))).toBeGreaterThan(0)
+      expect((await startFrom('203.0.113.10', 99)).status).toBe(200)
+    }
+  )
 })

@@ -1267,10 +1267,18 @@
             }
           },
           "429": {
-            "description": "`verification.too_many_attempts`: Too many wrong codes. Ask for a new one.",
+            "description": "`rate.limited`: Too many requests. Try again later.\n`verification.too_many_attempts`: Too many wrong codes. Ask for a new one.",
             "content": {
               "application/json": {
                 "examples": {
+                  "rate.limited": {
+                    "value": {
+                      "error": {
+                        "code": "rate.limited",
+                        "message": "Too many requests. Try again later."
+                      }
+                    }
+                  },
                   "verification.too_many_attempts": {
                     "value": {
                       "error": {
@@ -2540,6 +2548,54 @@
                       "error": {
                         "code": "request.unsupported_media_type",
                         "message": "The request content type is not supported."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate.limited`: Too many requests. Try again later.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "rate.limited": {
+                    "value": {
+                      "error": {
+                        "code": "rate.limited",
+                        "message": "Too many requests. Try again later."
                       }
                     }
                   }
