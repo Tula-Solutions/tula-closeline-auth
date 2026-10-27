@@ -40,7 +40,7 @@ routes' descriptions (`GOOGLE_ROUTES`), the cookie base name and the `oidc.*` co
 - **Provider calls**: 5 s each, at most 2 jittered retries on a network error or a 5xx; the code
   exchange is retried only when no response came back. Keys are cached, refetched on an unknown
   `kid` at most once per 30 s. RS256 only, 60 s of skew.
-- **Rate limits** are per source (the `X-Forwarded-For` hop `TRUSTED_PROXY_HOPS` from the right; a shorter header is refused with `request.invalid` outside `local`) on all four routes, plus a cap
+- **Rate limits** are per source (the `X-Forwarded-For` hop `TRUSTED_PROXY_HOPS` from the right; a shorter header is refused with `request.invalid` outside `local`; the callback redirects to `/sign-in?error=request.invalid`, the others answer 400) on all four routes, plus a cap
   per attempt on `complete`. The edge limit in AGENTS.md still applies.
 - **Tests**: `createTestDeps().oidc` is the real HTTP adapter over an in-process fake Google
   (`adapters/memory/oidc-provider.ts`) with controls for every failure.

@@ -3951,7 +3951,7 @@
         ],
         "responses": {
           "302": {
-            "description": "Every outcome but `oidc.disabled`. Success: to `returnTo`, with the refresh cookie. A new person: to `/sign-up/google?attempt=<id>`. A failure: to `/sign-in?error=<code>`.",
+            "description": "Every outcome but `oidc.disabled`. Success: to `returnTo`, with the refresh cookie. A new person: to `/sign-up/google?attempt=<id>`. A failure: to `/sign-in?error=<code>`, including `request.invalid` when `X-Forwarded-For` has fewer hops than `TRUSTED_PROXY_HOPS`.",
             "headers": {
               "location": {
                 "schema": {
@@ -4730,6 +4730,54 @@
                       }
                     }
                   }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`request.invalid`: The request is not valid.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "request.invalid": {
+                    "value": {
+                      "error": {
+                        "code": "request.invalid",
+                        "message": "The request is not valid."
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "maxLength": 100,
+                          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2000
+                        },
+                        "details": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
                 }
               }
             }
