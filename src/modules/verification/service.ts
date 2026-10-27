@@ -132,17 +132,26 @@ export async function verifyCode(
   code: string
 ): Promise<string> {
   const now = deps.clock.now()
-  const token = await deps.verificationTokens.findLatest(
-    tenant.environmentId,
-    'email_verification',
-    subject
-  )
-  if (!token || token.consumedAt || token.expiresAt.getTime() <= now.getTime()) {
+  const latest = () =>
+    deps.verificationTokens.findLatest(tenant.environmentId, 'email_verification', subject)
+  const isUsable = (t: Awaited<ReturnType<typeof latest>>) =>
+    t !== null && !t.consumedAt && t.expiresAt.getTime() > now.getTime()
+  const token = await latest()
+  if (!token || !isUsable(token)) {
     throw fail(AUTH_ERRORS['verification.expired'])
   }
   const counted = await deps.verificationTokens.recordAttempt(tenant.environmentId, token.id, now)
   if (!counted) {
-    throw fail(AUTH_ERRORS['verification.too_many_attempts'])
+    // The guarded update refuses for two reasons: the tries are used up, or the code was spent
+    // or replaced since the read above. Read again to tell which one it was.
+    const again = await latest()
+    throw fail(
+      AUTH_ERRORS[
+        again?.id === token.id && isUsable(again)
+          ? 'verification.too_many_attempts'
+          : 'verification.expired'
+      ]
+    )
   }
   const presented = await deps.keyedHash.hmac(KEYED_HASH_PURPOSE, hashInput(token.id, code))
   if (!timingSafeEqual(presented, counted.codeHash)) {
