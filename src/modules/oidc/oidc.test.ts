@@ -296,6 +296,18 @@ describe('start', () => {
       expect((await startFrom(app, '203.0.113.2, 198.51.100.1')).status).toBe(200)
     })
 
+    test('outside local, auth-options and the callback refuse a request with no header', async () => {
+      const { app } = await setup({ env: { ENVIRONMENT: 'dev' } })
+
+      const options = await call(app, 'GET', '/v1/client/auth-options')
+      expect(options.status).toBe(400)
+      expect(options.body).toMatchObject({ error: { code: 'request.invalid' } })
+
+      const back = await call(app, 'GET', `${CALLBACK}?code=abc&state=xyz`)
+      expect(back.status).toBe(302)
+      expect(back.headers.get('location')).toBe('/sign-in?error=request.invalid')
+    })
+
     test('in local, a header with fewer hops than trusted, or none, shares one bucket', async () => {
       const { app } = await setup({ env: { TRUSTED_PROXY_HOPS: '2' } })
 
